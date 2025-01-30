@@ -5,23 +5,30 @@ from torch import nn
 
 # TODO: inherit ResNet and DenseNet from MLP.
 
+
 class RNNModel(nn.Module):
     """Container module with an encoder, a recurrent module, and a decoder."""
 
-    def __init__(self, rnn_type, ntoken, ninp, nhid, nlayers, dropout=0.5, tie_weights=False):
+    def __init__(
+        self, rnn_type, ntoken, ninp, nhid, nlayers, dropout=0.5, tie_weights=False
+    ):
         super(RNNModel, self).__init__()
         self.ntoken = ntoken
         self.drop = nn.Dropout(dropout)
         self.encoder = nn.Embedding(ntoken, ninp)
-        if rnn_type in ['LSTM', 'GRU']:
+        if rnn_type in ["LSTM", "GRU"]:
             self.rnn = getattr(nn, rnn_type)(ninp, nhid, nlayers, dropout=dropout)
         else:
             try:
-                nonlinearity = {'RNN_TANH': 'tanh', 'RNN_RELU': 'relu'}[rnn_type]
+                nonlinearity = {"RNN_TANH": "tanh", "RNN_RELU": "relu"}[rnn_type]
             except KeyError as e:
-                raise ValueError( """An invalid option for `--model` was supplied,
-                                 options are ['LSTM', 'GRU', 'RNN_TANH' or 'RNN_RELU']""") from e
-            self.rnn = nn.RNN(ninp, nhid, nlayers, nonlinearity=nonlinearity, dropout=dropout)
+                raise ValueError(
+                    """An invalid option for `--model` was supplied,
+                                 options are ['LSTM', 'GRU', 'RNN_TANH' or 'RNN_RELU']"""
+                ) from e
+            self.rnn = nn.RNN(
+                ninp, nhid, nlayers, nonlinearity=nonlinearity, dropout=dropout
+            )
         self.decoder = nn.Linear(nhid, ntoken)
 
         # Optionally tie weights as in:
@@ -32,7 +39,9 @@ class RNNModel(nn.Module):
         # https://arxiv.org/abs/1611.01462
         if tie_weights:
             if nhid != ninp:
-                raise ValueError('When using the tied flag, nhid must be equal to emsize')
+                raise ValueError(
+                    "When using the tied flag, nhid must be equal to emsize"
+                )
             self.decoder.weight = self.encoder.weight
 
         self.init_weights()
@@ -57,11 +66,14 @@ class RNNModel(nn.Module):
 
     def init_hidden(self, bsz):
         weight = next(self.parameters())
-        if self.rnn_type == 'LSTM':
-            return (weight.new_zeros(self.nlayers, bsz, self.nhid),
-                    weight.new_zeros(self.nlayers, bsz, self.nhid))
+        if self.rnn_type == "LSTM":
+            return (
+                weight.new_zeros(self.nlayers, bsz, self.nhid),
+                weight.new_zeros(self.nlayers, bsz, self.nhid),
+            )
         else:
             return weight.new_zeros(self.nlayers, bsz, self.nhid)
+
 
 class MLP(nn.Module):
     def __init__(
@@ -124,14 +136,16 @@ class MLP(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, 
-                ninp,
-                noutp,
-                nlayers=2,
-                nhid=200,
-                activation="Softplus",
-                dropout=0.5,
-                init="xavier_normal_"):
+    def __init__(
+        self,
+        ninp,
+        noutp,
+        nlayers=2,
+        nhid=200,
+        activation="Softplus",
+        dropout=0.5,
+        init="xavier_normal_",
+    ):
 
         super().__init__()
 
@@ -142,11 +156,22 @@ class ResNet(nn.Module):
 
         self.activation_function = getattr(nn, activation)
 
-        self.input_layer = nn.Sequential(nn.Linear(ninp, nhid), self.activation_function(), nn.Dropout(p=dropout))
-        self.hidden_layers = nn.ModuleList([
-            nn.Sequential(nn.Linear(nhid, nhid), self.activation_function(), nn.Dropout(p=dropout)) for _ in range(nlayers-1)]
-            )
-        self.output_layer = nn.Sequential(nn.Linear(nhid, noutp), self.activation_function())
+        self.input_layer = nn.Sequential(
+            nn.Linear(ninp, nhid), self.activation_function(), nn.Dropout(p=dropout)
+        )
+        self.hidden_layers = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(nhid, nhid),
+                    self.activation_function(),
+                    nn.Dropout(p=dropout),
+                )
+                for _ in range(nlayers - 1)
+            ]
+        )
+        self.output_layer = nn.Sequential(
+            nn.Linear(nhid, noutp), self.activation_function()
+        )
 
         self.init_weights()
 
@@ -154,9 +179,9 @@ class ResNet(nn.Module):
 
         for layer in [*self.input_layer, *self.hidden_layers, *self.output_layer]:
             if isinstance(layer, nn.Linear):
-                if hasattr(layer, 'weight'):
+                if hasattr(layer, "weight"):
                     eval("torch.nn.init.%s(layer.weight)" % self.init)
-                if hasattr(layer, 'bias'):
+                if hasattr(layer, "bias"):
                     nn.init.zeros_(layer.bias)
 
     def forward(self, x):

@@ -79,7 +79,7 @@ class ConstrainedExponentialSchedulerMaLagrange:
         self.gamma = self.lam - self.lower_bound_lam
 
     def update_lam(self):
-        #print(self.constraint_ma, self.annealing_rate*self.constraint_ma)
+        # print(self.constraint_ma, self.annealing_rate*self.constraint_ma)
         self.gamma = self.gamma * np.exp(self.annealing_rate * self.constraint_ma)
 
     def __call__(self, loss: float) -> float:
@@ -88,7 +88,7 @@ class ConstrainedExponentialSchedulerMaLagrange:
         if self.adapt_after_first_satisfied:
             if not self.constraint_first_satisfied and constraint < 0:
                 self.constraint_first_satisfied = True
-        #print(self.constraint_bound)
+        # print(self.constraint_bound)
         if constraint < 0:
             self.current_constraint_satisfied = True
         else:
@@ -109,12 +109,12 @@ class ConstrainedExponentialSchedulerMaLagrange:
             self.update_lam()
 
         # TODO: should self.gamma be clipped?
-        #if self.gamma > self.clip_lam_max:
+        # if self.gamma > self.clip_lam_max:
         #    print(self.gamma)
         self.gamma = float(
             np.clip(self.gamma, 0.0 - self.lower_bound_lam, self.clip_lam_max)
         )
-        
+
         self.lam = self.gamma + self.lower_bound_lam
 
         return self.lam

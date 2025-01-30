@@ -30,12 +30,10 @@ def main(cfg: DictConfig) -> None:
     cudnn.deterministic = False
     cudnn.benchmark = True
 
-
     tb_logger = TensorBoardLogger(
         save_dir=cfg["logging_params"]["save_dir"],
         name=cfg["logging_params"]["name"],
     )
-    
 
     checkpoint_callback = ModelCheckpoint(
         # dirpath=f"{tb_logger.save_dir}",
@@ -58,11 +56,14 @@ def main(cfg: DictConfig) -> None:
     with open_dict(cfg):
         preprocessing_data = data.prepare_data()
         if preprocessing_data is not None:
-            preprocessing_data = {key: list(map(float, value)) for key, value in data.prepare_data().items()}
-            cfg['dataset']['config'].update(preprocessing_data)
-            cfg['dataset']['config']['mode'] = 'eval'
-            data.mode = 'eval'
-    
+            preprocessing_data = {
+                key: list(map(float, value))
+                for key, value in data.prepare_data().items()
+            }
+            cfg["dataset"]["config"].update(preprocessing_data)
+            cfg["dataset"]["config"]["mode"] = "eval"
+            data.mode = "eval"
+
     tb_logger.log_hyperparams(params=cfg)
 
     logger.info(f"{tb_logger.save_dir}")

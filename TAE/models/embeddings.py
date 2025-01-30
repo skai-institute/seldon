@@ -26,11 +26,13 @@ class PositionalEncoding(nn.Module):
 
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, x):
         r"""Inputs of forward function
@@ -43,17 +45,17 @@ class PositionalEncoding(nn.Module):
             >>> output = pos_encoder(x)
         """
 
-        x = x + self.pe[:x.size(0), :]
+        x = x + self.pe[: x.size(0), :]
         return self.dropout(x)
-    
-class FPEmbedding(nn.Module):
 
+
+class FPEmbedding(nn.Module):
 
     def __init__(self, nvector, nemb, dropout=0.2):
         super().__init__()
 
-        self.nvector = nvector # size of the input vector to embed
-        self.nemb = nemb # embedding dimension
+        self.nvector = nvector  # size of the input vector to embed
+        self.nemb = nemb  # embedding dimension
         self.dropout = nn.Dropout(p=dropout)
 
         self.linear_transform = nn.Linear(nvector, nemb)
@@ -65,16 +67,16 @@ class FPEmbedding(nn.Module):
 
         for layer in [self.linear_transform]:
             if isinstance(layer, nn.Linear):
-                if hasattr(layer, 'weight'):
+                if hasattr(layer, "weight"):
                     nn.init.xavier_normal_(layer.weight)
-                if hasattr(layer, 'bias'):
+                if hasattr(layer, "bias"):
                     nn.init.zeros_(layer.bias)
 
     def forward(self, x):
         # input is assumed to be N_seq x N_batch x N_vec
         if x.shape[-1] != self.nvector:
             if self.nvector != 1:
-                raise ValueError('Input Vector Has the incorrect shape!') 
+                raise ValueError("Input Vector Has the incorrect shape!")
             return self.forward(torch.unsqueeze(x, -1))
         x = self.linear_transform(x)
         x = self.norm(x)

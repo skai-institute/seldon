@@ -21,7 +21,7 @@ MODULES = {
     "ConstantScheduler": ConstantScheduler,
     "ConvDecoder": ConvDecoder,
     "ConvEncoder": ConvEncoder,
-    "VAELabel" : VAELabel
+    "VAELabel": VAELabel,
 }
 
 # TODO: switch it back when the cluster updated to python 3.8

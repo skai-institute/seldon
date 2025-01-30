@@ -111,7 +111,7 @@ class Label_MLPEncoder(BaseEncoder):
         else:
             outputs = self.mlp(inputs)
         return outputs
-    
+
 
 class ConvEncoder(BaseEncoder):
     """Multi-layer perceptron encoder."""
@@ -134,7 +134,7 @@ class ConvEncoder(BaseEncoder):
             hidden_dims: tuple specifying feature dimensions of hidden layers
         """
         super().__init__(observation_dim=observation_dim)
-        
+
         self.is_residual_on = is_residual_on
 
         # TODO: modify to a proper method
@@ -150,14 +150,27 @@ class ConvEncoder(BaseEncoder):
         for i in range(hidden_layers):
             modules.append(
                 nn.Sequential(
-                    nn.Conv2d(in_channels, self.observation_dim[0] if i+1 == hidden_layers else out_channels, kernel_size=kernel_size, stride=stride, padding=P),
+                    nn.Conv2d(
+                        in_channels,
+                        (
+                            self.observation_dim[0]
+                            if i + 1 == hidden_layers
+                            else out_channels
+                        ),
+                        kernel_size=kernel_size,
+                        stride=stride,
+                        padding=P,
+                    ),
                     activation_fn,
-                    nn.BatchNorm2d(self.observation_dim[0] if i+1 == hidden_layers else out_channels),
+                    nn.BatchNorm2d(
+                        self.observation_dim[0]
+                        if i + 1 == hidden_layers
+                        else out_channels
+                    ),
                     nn.Dropout(p=dropout),
-                    
                 )
             )
-            h_out = (h_in + 2 * P - kernel_size)//stride + 1
+            h_out = (h_in + 2 * P - kernel_size) // stride + 1
             h_in = h_out
             in_channels = out_channels
             # modules.append(nn.Sequential(nn.Linear(in_channels, h_dim), activation_fn))
@@ -166,11 +179,14 @@ class ConvEncoder(BaseEncoder):
 
         hidden_dims = [self.h_out] * hidden_layers
         self.hidden_dims = hidden_dims
-        #self.pooling = nn.MaxPool2d(kernel_size=kernel_size, stride=stride, padding=P)
-        #self.h_out = (h_in + 2 * P - kernel_size)//stride + 1
+        # self.pooling = nn.MaxPool2d(kernel_size=kernel_size, stride=stride, padding=P)
+        # self.h_out = (h_in + 2 * P - kernel_size)//stride + 1
         self.flat_output = self.h_out * self.h_out * self.observation_dim[0]
-        self.linear_output = nn.Sequential(nn.Linear(self.flat_output, self.flat_output), activation_fn, nn.Dropout(p=dropout))
-
+        self.linear_output = nn.Sequential(
+            nn.Linear(self.flat_output, self.flat_output),
+            activation_fn,
+            nn.Dropout(p=dropout),
+        )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         inputs = inputs.view(-1, *self.observation_dim)
@@ -185,9 +201,8 @@ class ConvEncoder(BaseEncoder):
         else:
             outputs = self.mlp(inputs)
 
-        #outputs = self.pooling(outputs)
+        # outputs = self.pooling(outputs)
         outputs = outputs.view(-1, self.flat_output)
         outputs = self.linear_output(outputs)
-        
 
         return outputs

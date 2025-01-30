@@ -125,7 +125,8 @@ class Label_MLPDecoder(BaseDecoder):
         else:
             outputs = self.mlp(inputs)
         return outputs
-    
+
+
 class ConvDecoder(BaseDecoder):
     """Multi-layer perceptron decoder."""
 
@@ -153,33 +154,41 @@ class ConvDecoder(BaseDecoder):
 
         # TODO: modify to a proper method
         activation_fn = eval("nn.%s()" % activation)
-        
 
         modules = []
         in_channels = 1
-        h_out = self.latent_root # sqrt latent_dim
-        P = ((stride-1)*(output_dim-1) - 1) // 2
+        h_out = self.latent_root  # sqrt latent_dim
+        P = ((stride - 1) * (output_dim - 1) - 1) // 2
         for h_dim in range(hidden_layers):
             modules.append(
                 nn.Sequential(
-                    nn.ConvTranspose2d(in_channels, 3 if h_dim+1 == hidden_layers else depth, kernel_size=kernel_size, stride=stride),
+                    nn.ConvTranspose2d(
+                        in_channels,
+                        3 if h_dim + 1 == hidden_layers else depth,
+                        kernel_size=kernel_size,
+                        stride=stride,
+                    ),
                     activation_fn,
-                    nn.BatchNorm2d(3 if h_dim+1 == hidden_layers else depth),
+                    nn.BatchNorm2d(3 if h_dim + 1 == hidden_layers else depth),
                     nn.Dropout(p=dropout),
                 )
             )
             in_channels = depth
-            h_out = (h_out - 1)*stride + kernel_size
+            h_out = (h_out - 1) * stride + kernel_size
             # modules.append(nn.Sequential(nn.Linear(in_channels, h_dim), activation_fn))
-            #in_channels = h_dim
+            # in_channels = h_dim
         self.mlp = nn.Sequential(*modules)
         self.h_out = h_out
-        self.observation_dim = output_dim*output_dim*3
+        self.observation_dim = output_dim * output_dim * 3
         self.output_dim = output_dim
         self.hidden_dims = [self.observation_dim]
-        
-        self.final_output = nn.Sequential(nn.Linear(self.h_out*self.h_out*3, self.observation_dim), activation_fn)
-        self.initial_input = nn.Sequential(nn.Linear(self.latent_dim, self.latent_dim), activation_fn)
+
+        self.final_output = nn.Sequential(
+            nn.Linear(self.h_out * self.h_out * 3, self.observation_dim), activation_fn
+        )
+        self.initial_input = nn.Sequential(
+            nn.Linear(self.latent_dim, self.latent_dim), activation_fn
+        )
 
     def std_to_bound(self, reconstruction_std):
         bound = (
@@ -197,10 +206,10 @@ class ConvDecoder(BaseDecoder):
         self,
         inputs: torch.Tensor,
     ) -> torch.Tensor:
-  
+
         outputs = self.initial_input(inputs)
         outputs = inputs.view(-1, 1, self.latent_root, self.latent_root)
- 
+
         if self.is_residual_on:
 
             outputs = self.mlp[0](outputs)
@@ -212,11 +221,10 @@ class ConvDecoder(BaseDecoder):
                 outputs = self.mlp[t](outputs_pre + outputs_curr)
                 outputs_pre = outputs_curr
                 outputs_curr = outputs
-                
+
         else:
             outputs = self.mlp(outputs)
         outputs = outputs.view(-1, 3 * self.h_out * self.h_out)
         outputs = self.final_output(outputs)
-        #outputs = outputs.view(-1, 3, self.output_dim, self.output_dim)
+        # outputs = outputs.view(-1, 3, self.output_dim, self.output_dim)
         return outputs
-
