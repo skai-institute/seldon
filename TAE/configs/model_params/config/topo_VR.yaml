@@ -1,0 +1,5 @@
+topo_sig:
+  name: "VR"
+  config:
+    use_cycles: False
+    match_edges: "symmetric"

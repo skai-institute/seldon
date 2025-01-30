@@ -1,9 +1,11 @@
 import typing
 
-from datasets.YSE_json_dataset import JSONDataLoader
+from TAE.datasets.YSE_json_dataset import JSONDataLoader
+from TAE.datasets.datasets import RandomData
 
 MODULES = {
     "YSEData": JSONDataLoader,
+    "RandomData": RandomData,
 }
 
 # TODO: switch it back when the cluster updated to python 3.8

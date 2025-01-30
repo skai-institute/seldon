@@ -1,0 +1,10 @@
+name: "Experiment"
+config:
+  params:
+    dataset: default
+    figures: []
+    optimizer:
+      name: Adam
+      config:
+        LR: 0.0005
+    batch_size: 256
