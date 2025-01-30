@@ -1,0 +1,26 @@
+name: tae
+channels:
+  - conda-forge
+  - numba
+  - nvidia
+  - pytorch
+  - http://ssb.stsci.edu/astroconda
+  - defaults
+dependencies:
+  - pip
+  - numpy
+  - scipy
+  - astropy
+  - scikit-learn
+  - matplotlib
+  - polyaxon
+  - pip:
+    - torch
+    - torchvision
+    - torchaudio
+    - polyaxon
+    - omegaconf
+    - lightning
+    - lightning-bolts
+    - h5py
+    - hydra-core
