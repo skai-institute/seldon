@@ -7,6 +7,7 @@ from TAE.models.scheduler import (
     ConstrainedExponentialSchedulerMaLagrange,
 )
 from TAE.models.vae_label import VAELabel
+from TAE.models.autoencoders import Autoencoder
 
 MODULES = {
     "MLPEncoder": MLPEncoder,
@@ -22,6 +23,7 @@ MODULES = {
     "ConvDecoder": ConvDecoder,
     "ConvEncoder": ConvEncoder,
     "VAELabel": VAELabel,
+    "Autoencoder": Autoencoder,
 }
 
 # TODO: switch it back when the cluster updated to python 3.8

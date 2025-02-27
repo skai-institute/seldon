@@ -3,12 +3,14 @@ from inspect import signature
 from TAE.experiments.experiment import (
     Experiment,
 )
+from TAE.experiments.autoencoder_experiment import AutoencoderExperiment
 
 # from models.factory import MODULES as model_modules
 
 
 MODULES = {
     "Experiment": Experiment,
+    "AutoencoderExperiment": AutoencoderExperiment,
 }
 # MODULES.update(model_modules)
 

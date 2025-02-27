@@ -1,0 +1,5 @@
+autoencoder:
+  name: 'Autoencoder'
+  config:
+    input_dim: 500
+    latent_dim: 4

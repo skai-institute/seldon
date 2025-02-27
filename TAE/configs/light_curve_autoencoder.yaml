@@ -1,0 +1,36 @@
+model_params:
+  name: 'Autoencoder'
+  config:
+    input_dim: 500
+    latent_dim: 4
+
+dataset:
+  name: 'LightCurveData'
+  config:
+    data_dir: '/Users/loaner/Downloads/test'
+    pad_length: 100
+    num_workers: 4
+    batch_size: 32
+
+exp_params:
+  name: "AutoencoderExperiment"
+  config:
+    params:
+      dataset: 'LightCurveData'
+      figures: []
+      optimizer:
+        name: Adam
+        config:
+          LR: 0.00001
+          weight_decay: 0.0
+
+trainer_params:
+  accelerator: 'cpu'
+  max_epochs: 50
+  gradient_clip_val: null
+  check_val_every_n_epoch: 1
+
+logging_params:
+  save_dir: "logs/"
+  name: "LCAE"
+  manual_seed: 1265

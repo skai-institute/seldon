@@ -2,10 +2,12 @@ import typing
 
 from TAE.datasets.YSE_json_dataset import JSONDataLoader
 from TAE.datasets.datasets import RandomData
+from TAE.datasets.lightcurve_dataset import LightCurveDataset
 
 MODULES = {
     "YSEData": JSONDataLoader,
     "RandomData": RandomData,
+    "LightCurveData": LightCurveDataset,
 }
 
 # TODO: switch it back when the cluster updated to python 3.8

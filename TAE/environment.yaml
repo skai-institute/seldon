@@ -1,26 +1,29 @@
 name: tae
 channels:
   - conda-forge
-  - numba
-  - nvidia
-  - pytorch
   - http://ssb.stsci.edu/astroconda
   - defaults
 dependencies:
+  - python=3.9
   - pip
   - numpy
   - scipy
   - astropy
   - scikit-learn
   - matplotlib
-  - polyaxon
+  - pyarrow
+  - fastparquet
+  - tensorboard
   - pip:
     - torch
     - torchvision
     - torchaudio
-    - polyaxon
-    - omegaconf
     - lightning
+    - umap
+    - omegaconf
     - lightning-bolts
     - h5py
     - hydra-core
+    - requests
+    - torch_optimizer
+

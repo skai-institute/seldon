@@ -18,7 +18,7 @@ from TAE.util import fill_config
 logger = logging.getLogger(__name__)
 
 
-@hydra.main(config_path="configs", config_name="human_CKNNAE")
+@hydra.main(config_path="TAE/configs", config_name="light_curve_autoencoder")
 def main(cfg: DictConfig) -> None:
     cfg = fill_config(cfg)
     print(cfg)
@@ -37,7 +37,7 @@ def main(cfg: DictConfig) -> None:
 
     checkpoint_callback = ModelCheckpoint(
         # dirpath=f"{tb_logger.save_dir}",
-        monitor="val_evaluation",
+        monitor="val_loss",
         mode="min",
         save_weights_only=True,
         filename="{epoch}-{val_loss:.2f}",
@@ -53,6 +53,7 @@ def main(cfg: DictConfig) -> None:
         cfg["exp_params"]["name"],
         {"model": model, "data": data, **config["exp_params"]["config"]},
     )
+    '''
     with open_dict(cfg):
         preprocessing_data = data.prepare_data()
         if preprocessing_data is not None:
@@ -63,6 +64,7 @@ def main(cfg: DictConfig) -> None:
             cfg["dataset"]["config"].update(preprocessing_data)
             cfg["dataset"]["config"]["mode"] = "eval"
             data.mode = "eval"
+    '''
 
     tb_logger.log_hyperparams(params=cfg)
 

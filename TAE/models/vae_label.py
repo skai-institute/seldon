@@ -6,9 +6,9 @@ import torch
 from torch import distributions, nn
 from torch.distributions.dirichlet import Dirichlet
 
-from models.decoders import BaseDecoder
-from models.encoders import BaseEncoder
-from models.scheduler import AnnealingLinearScheduler
+from TAE.models.decoders import BaseDecoder
+from TAE.models.encoders import BaseEncoder
+from TAE.models.scheduler import AnnealingLinearScheduler
 
 
 class LogDirichlet(Dirichlet):
