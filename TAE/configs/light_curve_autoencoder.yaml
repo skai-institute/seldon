@@ -1,36 +1,42 @@
-model_params:
-  name: 'Autoencoder'
-  config:
-    input_dim: 500
-    latent_dim: 4
-
 dataset:
-  name: 'LightCurveData'
+  name: SNDataModule
   config:
-    data_dir: '/Users/loaner/Downloads/test'
-    pad_length: 100
-    num_workers: 4
+    lightcurve_path: TAE/data/cleaned_data_ndt.pkl  
+    class_filter: SNIa                             
+    full_light_curves: null                           
+    band_map: {"g": 0, "r": 1, "i": 2, "z": 3, "y": 4, "u": 5}
+    normalization: max_partial_scalar
+    min_points: 4
+    augmentation: mixed
+    num_aug_per_curve: 11
     batch_size: 32
+    num_workers: 4
+   
+
+
+model_params:
+  name: BandAwareAutoencoder
+  config:
+    input_dim: 2
+    hidden_dim: 64
+    latent_dim: 8
+    #num_bands: 6
+    #band_embedding_dim: 4
 
 exp_params:
-  name: "AutoencoderExperiment"
+  name: GRUVAEExperiment
   config:
-    params:
-      dataset: 'LightCurveData'
-      figures: []
-      optimizer:
-        name: Adam
-        config:
-          LR: 0.00001
-          weight_decay: 0.0
+    kl_weight: 0.001
+    lr: 0.001
+    num_epochs: 100
+    # dataset will be filled by the fill_config function
 
 trainer_params:
-  accelerator: 'cpu'
-  max_epochs: 50
-  gradient_clip_val: null
-  check_val_every_n_epoch: 1
+  max_epochs: 100
+  accelerator: "auto"
+  devices: 1
 
 logging_params:
+  manual_seed: 42
   save_dir: "logs/"
-  name: "LCAE"
-  manual_seed: 1265
+  name: "BandAwareGRUVAE"

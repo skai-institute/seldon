@@ -1,3 +1,9 @@
+
+# Hydra outputs
+.hydra/
+outputs/
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -169,3 +175,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+TAE/data/filtered_data.pkl
+TAE/data/filtered_data_g5.pkl
+TAE/data/filtered_data_test.pkl
+TAE/data/filtered_data.pkl

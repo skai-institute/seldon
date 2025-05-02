@@ -3,15 +3,15 @@ from inspect import signature
 from TAE.experiments.experiment import (
     Experiment,
 )
-from TAE.experiments.autoencoder_experiment import AutoencoderExperiment
-
-# from models.factory import MODULES as model_modules
-
+#from TAE.experiments.autoencoder_experiment import AutoencoderExperiment
+from TAE.experiments.autoencoder_experiment import GRUVAEExperiment
 
 MODULES = {
-    "Experiment": Experiment,
-    "AutoencoderExperiment": AutoencoderExperiment,
+    #"Experiment": Experiment,
+    #"AutoencoderExperiment": AutoencoderExperiment,
+    "GRUVAEExperiment": GRUVAEExperiment, 
 }
+
 # MODULES.update(model_modules)
 
 # TODO: switch it back when the cluster updated to python 3.8
@@ -30,15 +30,14 @@ def get_module(name: str, config) -> Experiment:
     cls = MODULES[name]
     sig = signature(cls.__init__)
     for key, value in config.items():
-
-        key_sig = sig.parameters[
-            key
-        ].annotation  # Check that we're not supposed to pass a dict!
+        if key not in sig.parameters:
+            continue
+        key_sig = sig.parameters[key].annotation
         if hasattr(key_sig, "__origin__"):
             key_sig = key_sig.__origin__
         if isinstance(value, key_sig):
             pass
-
         elif isinstance(value, dict) and NAME_KEY in value and CONFIG_KEY in value:
             config[key] = get_module(value[NAME_KEY], value[CONFIG_KEY])
     return cls(**config)
+

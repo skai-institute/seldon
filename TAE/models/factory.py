@@ -1,4 +1,10 @@
-from TAE.models.decoders import Label_MLPDecoder, MLPDecoder, ConvDecoder
+from TAE.models.decoders import (
+    Label_MLPDecoder,
+    ConvDecoder,
+    MLPBandDecoder 
+)
+
+
 from TAE.models.encoders import Label_MLPEncoder, MLPEncoder, ConvEncoder
 from TAE.models.optimizer import Adam, RAdam, Ranger
 from TAE.models.scheduler import (
@@ -7,11 +13,17 @@ from TAE.models.scheduler import (
     ConstrainedExponentialSchedulerMaLagrange,
 )
 from TAE.models.vae_label import VAELabel
-from TAE.models.autoencoders import Autoencoder
+from TAE.models.autoencoders import Autoencoder, BandAwareAutoencoder
+#from TAE.experiments.autoencoder_experiment import Experiment, AutoencoderExperiment
+
+from inspect import signature
+
+NAME_KEY: str = "name"
+CONFIG_KEY: str = "config"
 
 MODULES = {
     "MLPEncoder": MLPEncoder,
-    "MLPDecoder": MLPDecoder,
+    "MLPBandDecoder": MLPBandDecoder, 
     "AnnealingLinearScheduler": AnnealingLinearScheduler,
     "ConstrainedExponentialSchedulerMaLagrange": ConstrainedExponentialSchedulerMaLagrange,
     "RAdam": RAdam,
@@ -24,21 +36,16 @@ MODULES = {
     "ConvEncoder": ConvEncoder,
     "VAELabel": VAELabel,
     "Autoencoder": Autoencoder,
+    "BandAwareAutoencoder": BandAwareAutoencoder,
+    #"Experiment": Experiment,
+    #"AutoencoderExperiment": AutoencoderExperiment,
 }
 
-# TODO: switch it back when the cluster updated to python 3.8
-# NAME_KEY: typing.Final[str] = "name"
-# CONFIG_KEY: typing.Final[str] = "config"
-NAME_KEY: str = "name"
-CONFIG_KEY: str = "config"
-
-
-def get_module(name: str, config):
+def get_module(name: str, config) -> object:
     """Recursively deserializes objects registered in MODULES."""
     if name not in MODULES:
-        raise KeyError(
-            f"{name} not found in registered modules. Available are {MODULES.keys()}."
-        )
+        raise KeyError(f"{name} not found in registered modules. Available are {MODULES.keys()}.")
+
     cls = MODULES[name]
     for key, value in config.items():
         if isinstance(value, dict) and NAME_KEY in value and CONFIG_KEY in value:

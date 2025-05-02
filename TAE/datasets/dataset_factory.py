@@ -1,13 +1,16 @@
 import typing
 
 from TAE.datasets.YSE_json_dataset import JSONDataLoader
-from TAE.datasets.datasets import RandomData
-from TAE.datasets.lightcurve_dataset import LightCurveDataset
+#from TAE.datasets.datasets import RandomData
+from TAE.datasets.lightcurve_dataset import SNLightCurveDataset, SNDataModule
+from TAE.util import extract_curves_from_filtered_data  
+import pickle
+from pathlib import Path
 
 MODULES = {
     "YSEData": JSONDataLoader,
-    "RandomData": RandomData,
-    "LightCurveData": LightCurveDataset,
+    "SNDataModule": SNDataModule,
+    "SNLightCurveDataset": SNLightCurveDataset, 
 }
 
 # TODO: switch it back when the cluster updated to python 3.8
@@ -17,14 +20,18 @@ NAME_KEY: str = "name"
 CONFIG_KEY: str = "config"
 
 
-def get_module(name: str, config: typing.Dict[str, typing.Any]):
+
+# In dataset_factory.py, modify the get_module function:
+def get_module(name, config):
     """Recursively deserializes objects registered in MODULES."""
     if name not in MODULES:
         raise KeyError(
             f"{name} not found in registered modules. Available are {MODULES.keys()}."
         )
+
     cls = MODULES[name]
     for key, value in config.items():
         if isinstance(value, dict) and NAME_KEY in value and CONFIG_KEY in value:
             config[key] = get_module(value[NAME_KEY], value[CONFIG_KEY])
     return cls(**config)
+

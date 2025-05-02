@@ -206,3 +206,57 @@ class ConvEncoder(BaseEncoder):
         outputs = self.linear_output(outputs)
 
         return outputs
+
+
+# ==========================================
+# Encoder: GRUEncoder (single-band, no band_idx)
+# ==========================================
+
+class GRUEncoder(nn.Module):
+    """
+    GRU-based encoder for single-band supernova light curves.
+    Encodes [time, normalized flux] sequences into latent vector z.
+    """
+
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        """
+        Args:
+            input_dim: number of input features (e.g., time + normalized flux + dummy 1)
+            hidden_dim: hidden size of GRU
+            latent_dim: dimension of latent z vector
+        """
+        super().__init__()
+        self.gru = nn.GRU(
+            input_dim,
+            hidden_dim,
+            batch_first=True,
+            bidirectional=False
+        )
+
+        self.fc_mean = nn.Linear(hidden_dim, latent_dim)
+        self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
+
+    def forward(self, x):
+        """
+        Args:
+            x: (B, T, input_dim) input sequence
+
+        Returns:
+            z: sampled latent vector (B, latent_dim)
+            z_mean: mean of latent distribution (B, latent_dim)
+            z_logvar: log-variance of latent distribution (B, latent_dim)
+        """
+        _, h_n = self.gru(x)  # h_n: (1, B, hidden_dim)
+        h_n = h_n.squeeze(0)  # (B, hidden_dim)
+
+        z_mean = self.fc_mean(h_n)
+        z_logvar = torch.clamp(self.fc_logvar(h_n), min=-10.0, max=2.0)
+
+        if self.training:
+            std = torch.exp(0.5 * z_logvar)
+            eps = torch.randn_like(std)
+            z = z_mean + eps * std
+        else:
+            z = z_mean
+
+        return z, z_mean, z_logvar

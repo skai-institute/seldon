@@ -3,7 +3,7 @@ import typing
 import numpy as np
 import torch
 from torch import nn
-
+import torch.nn.functional as F
 
 class BaseDecoder(nn.Module):
     """Base decoder specifying minimal init protocol."""
@@ -228,3 +228,40 @@ class ConvDecoder(BaseDecoder):
         outputs = self.final_output(outputs)
         # outputs = outputs.view(-1, 3, self.output_dim, self.output_dim)
         return outputs
+
+NUM_BANDS    = 6          # keep the same constants you use elsewhere
+BAND_EMB_DIM = 4
+SIG_BASIS_K  = 4          # number of sigmoid bases
+
+class MLPBandDecoder(nn.Module):
+    def __init__(self, latent: int, hidden: int = 128, K: int = SIG_BASIS_K):
+        super().__init__()
+        self.K        = K
+        self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM)
+
+        inp = latent + BAND_EMB_DIM                       # concat z‖e_b
+        self.mlp = nn.Sequential(
+            nn.Linear(inp, hidden), nn.GELU(),
+            nn.Linear(hidden, hidden), nn.GELU(),
+            nn.Linear(hidden, 3 * K)                      # [a|c|s] for all bases
+        )
+        nn.init.uniform_(self.mlp[-1].weight, -0.2, 0.2)
+
+    def forward(self, z, t, band_idx):          # t:(B,T,1)
+        e_b   = self.band_emb(band_idx[:, 0, 0])        # (B,E)
+        params = self.mlp(torch.cat([z, e_b], dim=-1))  # (B, 3K)
+        params = params.view(-1, self.K, 3)             # (B,K,3)
+
+        a = params[:, :, 0]         # (B,K)
+        c = params[:, :, 1]             # (B,K)  centres in (0,1)
+        s = params[:, :, 2]    # (B,K)  positive scales
+
+        # ---------- broadcast & sum ----------------------------------
+        t_exp = t.expand(-1, -1, self.K)                # (B,T,K)
+        basis = torch.sigmoid((t_exp - c.unsqueeze(1)) * s.unsqueeze(1))  # (B,T,K)
+        out   = (a.unsqueeze(1) * basis).sum(-1, keepdim=True)            # (B,T,1)
+        return out
+
+
+
+    

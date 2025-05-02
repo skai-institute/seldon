@@ -4,6 +4,11 @@ import torch
 from torch import nn
 from dataclasses import dataclass
 
+from .encoders import GRUEncoder
+from .decoders import MLPBandDecoder 
+
+
+
 
 @dataclass
 class AEOutput:
@@ -55,3 +60,60 @@ class Autoencoder(nn.Module):
         
         return {'loss': train_loss}
 
+
+
+
+class BandAwareAutoencoder(nn.Module):
+    """
+    GRU-VAE-style autoencoder for supernova light curve reconstruction.
+    (Single-band version, no band_idx used anymore.)
+
+    This model uses a GRU encoder and an MLP decoder.
+    """
+
+    def __init__(self, input_dim, hidden_dim, latent_dim):
+        """
+        Args:
+            input_dim: number of input features (e.g., time + flux + dummy 1)
+            hidden_dim: hidden size for GRU encoder
+            latent_dim: dimension of latent z vector
+        """
+        super().__init__()
+        self.encoder = GRUEncoder(input_dim, hidden_dim, latent_dim)
+        self.decoder = MLPBandDecoder(latent_dim)  # hidden_dim inside decoder is default (128)
+
+    def forward(self, x, t, band_idx_full):
+        """
+        Forward pass through encoder and decoder.
+
+        Args:
+            x: (B, T1, input_dim) — input partial curve (time, flux, 1)
+            t: (B, T2, 1) — full time grid for reconstruction
+            band_idx_full: (B, T2, 1) — band code for each point
+
+        Returns:
+            dict with 'reconstructed', 'z_mean', 'z_logvar'
+        """
+        z, z_mean, z_logvar = self.encoder(x)
+        reconstructed = self.decoder(z, t, band_idx_full)
+
+        return {
+            "reconstructed": reconstructed,
+            "z_mean": z_mean,
+            "z_logvar": z_logvar
+        }
+
+    def encode(self, x, band_idx):
+        """
+        Encode input sequence into latent z.
+        """
+        with torch.no_grad():
+            z, _, _ = self.encoder(x)
+            return z
+
+    def decode(self, z, t, band_idx):
+        """
+        Decode latent z into flux values along time grid.
+        """
+        with torch.no_grad():
+            return self.decoder(z, t, band_idx)
