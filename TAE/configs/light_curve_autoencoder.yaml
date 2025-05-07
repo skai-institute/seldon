@@ -1,13 +1,13 @@
 dataset:
   name: SNDataModule
   config:
-    lightcurve_path: TAE/data/cleaned_data_ndt.pkl  
+    lightcurve_path: TAE/data/cleaned_training_data.pkl  
     class_filter: SNIa                             
     full_light_curves: null                           
     band_map: {"g": 0, "r": 1, "i": 2, "z": 3, "y": 4, "u": 5}
     normalization: max_partial_scalar
     min_points: 4
-    augmentation: mixed
+    augmentation: full
     num_aug_per_curve: 11
     batch_size: 32
     num_workers: 4
@@ -17,7 +17,7 @@ dataset:
 model_params:
   name: BandAwareAutoencoder
   config:
-    input_dim: 2
+    input_dim: 3
     hidden_dim: 64
     latent_dim: 8
     #num_bands: 6
@@ -29,11 +29,12 @@ exp_params:
     kl_weight: 0.001
     lr: 0.001
     num_epochs: 100
+    batch_size: 32
     # dataset will be filled by the fill_config function
 
 trainer_params:
   max_epochs: 100
-  accelerator: "auto"
+  accelerator: "gpu"
   devices: 1
 
 logging_params:

@@ -243,23 +243,34 @@ class MLPBandDecoder(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(inp, hidden), nn.GELU(),
             nn.Linear(hidden, hidden), nn.GELU(),
-            nn.Linear(hidden, 3 * K)                      # [a|c|s] for all bases
+            nn.Linear(hidden, NUM_BANDS * 3 * K)                      # [a|c|s] for all bases
         )
+
+  
         nn.init.uniform_(self.mlp[-1].weight, -0.2, 0.2)
 
     def forward(self, z, t, band_idx):          # t:(B,T,1)
-        e_b   = self.band_emb(band_idx[:, 0, 0])        # (B,E)
-        params = self.mlp(torch.cat([z, e_b], dim=-1))  # (B, 3K)
-        params = params.view(-1, self.K, 3)             # (B,K,3)
+        e_b   = self.band_emb(band_idx[:, :, 0])        # (B,seq,E)
+        z = z.unsqueeze(1).expand(z.shape[0], e_b.shape[1], z.shape[1])
+        #import pdb; pdb.set_trace()
+        params = self.mlp(torch.cat([z, e_b], dim=-1))  # (B, 3K) # Should be (B, band, 3k)
+        #params = torch.cat([mlp(z).unsqueeze(1) for mlp in self.mlps], dim=1) # perform with each mlp
+        #params = self.mlp(z) # (B, band, 3K)
+        #import pdb; pdb.set_trace()
+        params = params.view(params.shape[0], params.shape[1], NUM_BANDS, 3*self.K)             # (B,band,3K)
+        params = torch.gather(params, 2, band_idx.unsqueeze(2).expand(-1, -1, 1, 3*self.K)).squeeze(2).view(params.shape[0], -1, self.K, 3) # (B, K, 3)
+        
+        #params = torch.gather(params, 1, band_idx)
+        # NEEDS ANOTHER DIMENSION TO INDEX EACH BAND!
 
-        a = params[:, :, 0]         # (B,K)
-        c = params[:, :, 1]             # (B,K)  centres in (0,1)
-        s = params[:, :, 2]    # (B,K)  positive scales
-
+        a = params[:, :, :, 0] # (B,seq,K)
+        c = params[:, :, :, 1] # (B,seq,K)
+        s = params[:, :, :, 2] # (B,seq,K)
+        #import pdb; pdb.set_trace()
         # ---------- broadcast & sum ----------------------------------
         t_exp = t.expand(-1, -1, self.K)                # (B,T,K)
-        basis = torch.sigmoid((t_exp - c.unsqueeze(1)) * s.unsqueeze(1))  # (B,T,K)
-        out   = (a.unsqueeze(1) * basis).sum(-1, keepdim=True)            # (B,T,1)
+        basis = torch.sigmoid((t_exp - c) * s)  # (B,T,K)
+        out   = (a * basis).sum(-1, keepdim=True)            # (B,T,1)
         return out
 
 

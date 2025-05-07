@@ -82,7 +82,7 @@ class BandAwareAutoencoder(nn.Module):
         self.encoder = GRUEncoder(input_dim, hidden_dim, latent_dim)
         self.decoder = MLPBandDecoder(latent_dim)  # hidden_dim inside decoder is default (128)
 
-    def forward(self, x, t, band_idx_full):
+    def forward(self, x, t, band_idx_part, band_idx_full):
         """
         Forward pass through encoder and decoder.
 
@@ -94,7 +94,7 @@ class BandAwareAutoencoder(nn.Module):
         Returns:
             dict with 'reconstructed', 'z_mean', 'z_logvar'
         """
-        z, z_mean, z_logvar = self.encoder(x)
+        z, z_mean, z_logvar = self.encoder(x, band_idx_part)
         reconstructed = self.decoder(z, t, band_idx_full)
 
         return {
@@ -108,7 +108,7 @@ class BandAwareAutoencoder(nn.Module):
         Encode input sequence into latent z.
         """
         with torch.no_grad():
-            z, _, _ = self.encoder(x)
+            z, _, _ = self.encoder(x, band_idx)
             return z
 
     def decode(self, z, t, band_idx):

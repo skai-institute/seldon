@@ -9,6 +9,12 @@ from tqdm import tqdm
 import torch
 from torch.utils.data import Dataset
 import torch
+from enum import Enum
+
+
+TIME = 0
+FLUX = 1
+FLUXERR = 2
 
 
 
@@ -44,7 +50,7 @@ class SNLightCurveDataset(Dataset):
                  min_points=5,
                  augmentation="mixed",
                  num_aug_per_curve=3,
-                 min_obs_fraction=0.5):
+                 min_obs_fraction=0.5,):
         self.full_light_curves = full_light_curves
         self.normalization = normalization
         self.min_points = min_points
@@ -60,7 +66,9 @@ class SNLightCurveDataset(Dataset):
             self.index_pairs.append((i, "full"))
             for _ in range(num_aug_per_curve):
                 self.index_pairs.append((i, "aug"))
-
+        columns = ["days_since_first_observation", "FLUXCAL", "FLUXCALERR"]
+        self.full_light_curve_arrays = [df[columns].astype(np.float32).reset_index(drop=True).values for df in tqdm(self.full_light_curves)]
+        self.band_array = [df["band" if "band" in df.columns else "filter"].reset_index(drop=True).values for df in tqdm(self.full_light_curves)]
         print(f"Dataset contains {len(self.index_pairs)} samples from {len(full_light_curves)} full curves.")
 
     def set_min_obs_fraction(self, frac: float):
@@ -69,6 +77,26 @@ class SNLightCurveDataset(Dataset):
 
     def __len__(self):
         return len(self.index_pairs)
+    
+
+    def get_aumentation_index(self, df):
+        n = len(df)
+        min_len = max(self.min_points, int(self.min_obs_fraction * n))
+        if self.augmentation == "mixed":
+            mode = np.random.choice(["cutoff", "cuton", "sparse"])
+        else:
+            mode = self.augmentation
+
+        if mode == "cutoff":
+            return np.arange(np.random.randint(min_len, n))
+        if mode == "cuton":
+            hi = n - min_len
+            return np.arange(np.random.randint(hi, n), n) if hi > 0 else np.arange(hi)
+        if mode == "sparse":
+            k = np.random.randint(min_len, n)
+            return np.sort(np.random.choice(n, k, replace=False))
+
+
 
     def _apply_augmentation_mode(self, df, mode):
         """Cutoff, cuton, sparse, or return full."""
@@ -76,13 +104,13 @@ class SNLightCurveDataset(Dataset):
         min_len = max(self.min_points, int(self.min_obs_fraction * n))
 
         if mode == "cutoff":
-            return df.iloc[:np.random.randint(min_len, n)]
+            return df[:np.random.randint(min_len, n)]
         if mode == "cuton":
             hi = n - min_len
-            return df.iloc[np.random.randint(0, hi):] if hi > 0 else df
+            return df[np.random.randint(0, hi):] if hi > 0 else df
         if mode == "sparse":
             k = np.random.randint(min_len, n)
-            return df.iloc[np.sort(np.random.choice(n, k, replace=False))]
+            return df[np.sort(np.random.choice(n, k, replace=False))]
         return df
 
     def _augment(self, df):
@@ -93,63 +121,95 @@ class SNLightCurveDataset(Dataset):
             return self._apply_augmentation_mode(df, self.augmentation)
         else:
             return df
+        
+    def apply_flux_normalization(self, part_flux, part_fluxerr, full_flux, full_fluxerr):
+        ''' can unify these as a (ref, *other) style'''
+
+        if self.normalization == "max_partial_scalar":
+            scalar = part_flux.max() + 1e-6
+            for arr in (part_flux, part_fluxerr, full_flux, full_fluxerr):
+                arr /= scalar
+            flux_norm = ("max_partial_scalar", float(scalar))
+        else:  # "zscore"
+            mu, sd = part_flux.mean(), part_flux.std() or 1.0
+            scalar = sd
+            for arr in (part_flux, full_flux):
+                arr -= mu
+                arr /= sd
+            for arr in (part_fluxerr, full_fluxerr):
+                arr /= sd
+            flux_norm = ("zscore", float(mu), float(sd))
+
+        return flux_norm
+    
+    def apply_time_normalization(self, part_time, full_time):
+
+        t_min = part_time.min()
+        t_rng = 500
+        for arr in (part_time, full_time):
+            arr -= t_min
+            arr /= t_rng
+        return ("minmax", float(t_min), float(t_rng))
+
 
     def __getitem__(self, idx):
         curve_i, mode = self.index_pairs[idx]
-        full_df = self.full_light_curves[curve_i].reset_index(drop=True)
-        part_df = full_df if mode == "full" else self._augment(full_df)
+        full_df = self.full_light_curve_arrays[curve_i].copy()
+        if self.augmentation == "full":
+            mode = "full"
+        if mode == "full":
+            part_df = full_df.copy()
+            aug_idx = np.arange(len(full_df))
+        else:
+            aug_idx = self.get_aumentation_index(full_df)
+            part_df = full_df.copy()[aug_idx]
+        #part_df = full_df.copy() if mode == "full" else self._augment(full_df).copy()
 
-        # Band code
-        band_col = "band" if "band" in full_df.columns else "filter"
-        band_code = BAND_IDX_MAP[str(full_df[band_col].iloc[0])]
-        band_t = torch.tensor(band_code, dtype=torch.long)
+
+        band_code = BAND_IDX_MAP[str(self.band_array[curve_i][0])]
+        band_codes = np.array([BAND_IDX_MAP[str(b)] for b in self.band_array[curve_i]])
+        band_t = torch.tensor(band_codes, dtype=torch.long)
 
         # Raw arrays
-        t_full_raw = full_df["days_since_first_observation"].to_numpy("float32")
-        f_full_raw = full_df["FLUXCAL"].to_numpy("float32")
-        ferr_full_r = full_df["FLUXCALERR"].to_numpy("float32")
-
-        t_part_raw = part_df["days_since_first_observation"].to_numpy("float32")
-        f_part_raw = part_df["FLUXCAL"].to_numpy("float32")
-        ferr_part_r = part_df["FLUXCALERR"].to_numpy("float32")
+        #full_df = full_df[["days_since_first_observation", "FLUXCAL", "FLUXCALERR"]].astype(np.float32)
+        #part_df = part_df[["days_since_first_observation", "FLUXCAL", "FLUXCALERR"]].astype(np.float32)
 
         # Time normalization
-        t_min = float(t_full_raw.min())
-        t_rng = float(np.ptp(t_full_raw)) + 1e-6
-        t_full = (t_full_raw - t_min) / t_rng
-        t_part = (t_part_raw - t_min) / t_rng
+        t_min = full_df[:, TIME].min()
+        t_rng = 500
+        full_df[:, TIME] = (full_df[:, TIME] - t_min) / t_rng
+        part_df[:, TIME] = (part_df[:, TIME] - t_min) / t_rng
 
         # Flux normalization
         if self.normalization == "max_partial_scalar":
-            scalar = np.max(f_part_raw) + 1e-6
-            f_full = f_full_raw / scalar
-            f_part = f_part_raw / scalar
-            ferr_full = ferr_full_r / scalar
-            ferr_part = ferr_part_r / scalar
+            scalar = np.max(part_df[:, FLUX]) + 1e-6
+            full_df[:, [FLUX, FLUXERR]] = full_df[:, [FLUX, FLUXERR]] / scalar
+            part_df[:, [FLUX, FLUXERR]] = part_df[:, [FLUX, FLUXERR]] / scalar
             flux_norm = ("max_partial_scalar", float(scalar))
         else:  # "zscore"
-            mu, sd = f_full_raw.mean(), f_full_raw.std() or 1.0
+            mu, sd = part_df[:, FLUX].mean(), part_df[:, FLUX].std() or 1.0
             scalar = sd
-            f_full = (f_full_raw - mu) / sd
-            f_part = (f_part_raw - mu) / sd
-            ferr_full = ferr_full_r / sd
-            ferr_part = ferr_part_r / sd
+            full_df[:, [FLUX, FLUXERR]] = (full_df[:, [FLUX, FLUXERR]] - mu) / sd
+            part_df[:, [FLUX, FLUXERR]] = (part_df[:, [FLUX, FLUXERR]] - mu) / sd
             flux_norm = ("zscore", float(mu), float(sd))
 
         # Convert to torch tensors
-        t_full_t = torch.from_numpy(t_full).unsqueeze(1)
-        f_full_t = torch.from_numpy(f_full).unsqueeze(1)
-        ferr_full = torch.from_numpy(ferr_full).unsqueeze(1)
+        t_full_t = torch.from_numpy(full_df[:, TIME]).unsqueeze(1)
+        f_full_t = torch.from_numpy(full_df[:, FLUX]).unsqueeze(1)
+        ferr_full = torch.from_numpy(full_df[:, FLUXERR]).unsqueeze(1)
 
-        t_part_t = torch.from_numpy(t_part).unsqueeze(1)
-        f_part_t = torch.from_numpy(f_part).unsqueeze(1)
-        ferr_part = torch.from_numpy(ferr_part).unsqueeze(1)
+        t_part_t = torch.from_numpy(part_df[:, TIME]).unsqueeze(1)
+        f_part_t = torch.from_numpy(part_df[:, FLUX]).unsqueeze(1)
+        ferr_part = torch.from_numpy(part_df[:, FLUXERR]).unsqueeze(1)
 
         scalar_t_part = torch.full_like(t_part_t, scalar)
         scalar_t_full = torch.full_like(t_full_t, scalar)
 
-        band_idx_full = band_t.expand(len(t_full_t), 1)
-        band_idx_part = band_t.expand(len(t_part_t), 1)
+        #band_idx_full = band_t.expand(len(t_full_t), 1)
+        #band_idx_part = band_t.expand(len(t_part_t), 1)
+
+        band_idx_full = band_t.unsqueeze(1)
+        band_idx_part = band_t[aug_idx].unsqueeze(1)
 
         # Mask for in-sample points
         mask = torch.zeros(len(t_full_t), dtype=torch.bool)
@@ -173,10 +233,10 @@ class SNLightCurveDataset(Dataset):
             "band_idx_full": band_idx_full,          # (T_full, 1)
 
             "in_sample_mask": mask,
-            "full_lengths": torch.tensor(len(t_full), dtype=torch.long),
+            "full_lengths": torch.tensor(len(full_df[:, TIME]), dtype=torch.long),
 
-            "peak_time": torch.tensor(float(full_df["days_since_first_observation"][f_full_raw.argmax()])),
-            "peak_flux": torch.tensor(float(f_full_raw.max())),
+            "peak_time": torch.tensor(float(full_df[:, TIME][full_df[:, FLUX].argmax()])),
+            "peak_flux": torch.tensor(float(full_df[:, FLUX].max())),
 
             "norm_info": {"flux": flux_norm, "time": ("minmax", float(t_min), float(t_rng))}
         }
@@ -205,6 +265,7 @@ def enhanced_collate_fn(batch):
 
         "time_full": pad([b["time_full"] for b in batch], (B, max_full, 1)),
         "flux_full": pad([b["flux_full"] for b in batch], (B, max_full, 1)),
+        "flux_err_full": pad([b["flux_err_full"] for b in batch], (B, max_full, 1)),
         "band_idx_full": pad([b["band_idx_full"] for b in batch], (B, max_full, 1), torch.long),
         "in_sample_mask": pad([b["in_sample_mask"].unsqueeze(1) for b in batch],
                               (B, max_full, 1), torch.bool).squeeze(2),
@@ -240,17 +301,19 @@ class SNDataModule(pl.LightningDataModule):
         self.min_points = min_points
         self.augmentation = augmentation
         self.num_aug_per_curve = num_aug_per_curve
+        self.dataset = None
 
     def setup(self, stage=None):
-        dataset = SNLightCurveDataset(
-            self.full_light_curves,
-            normalization=self.normalization,
-            min_points=self.min_points,
-            augmentation=self.augmentation,
-            num_aug_per_curve=self.num_aug_per_curve,
-            min_obs_fraction=self.min_obs_fraction
-        )
-
+        if self.dataset is None:
+            self.dataset = SNLightCurveDataset(
+                self.full_light_curves,
+                normalization=self.normalization,
+                min_points=self.min_points,
+                augmentation=self.augmentation,
+                num_aug_per_curve=self.num_aug_per_curve,
+                min_obs_fraction=self.min_obs_fraction
+            )
+        dataset = self.dataset
 
         train_size = int(0.8 * len(dataset))
         val_size = int(0.1 * len(dataset))
@@ -263,12 +326,12 @@ class SNDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_data, batch_size=self.batch_size, shuffle=True,
-                          num_workers=self.num_workers, collate_fn=enhanced_collate_fn)
+                          num_workers=self.num_workers, collate_fn=enhanced_collate_fn, prefetch_factor=10)
 
     def val_dataloader(self):
         return DataLoader(self.val_data, batch_size=self.batch_size, shuffle=False,
-                          num_workers=self.num_workers, collate_fn=enhanced_collate_fn)
+                          num_workers=self.num_workers, collate_fn=enhanced_collate_fn, prefetch_factor=10)
 
     def test_dataloader(self):
         return DataLoader(self.test_data, batch_size=self.batch_size, shuffle=False,
-                          num_workers=self.num_workers, collate_fn=enhanced_collate_fn)
+                          num_workers=self.num_workers, collate_fn=enhanced_collate_fn, prefetch_factor=10)

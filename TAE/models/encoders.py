@@ -212,31 +212,38 @@ class ConvEncoder(BaseEncoder):
 # Encoder: GRUEncoder (single-band, no band_idx)
 # ==========================================
 
+NUM_BANDS    = 6          # keep the same constants you use elsewhere
+BAND_EMB_DIM = 4
+
 class GRUEncoder(nn.Module):
     """
     GRU-based encoder for single-band supernova light curves.
     Encodes [time, normalized flux] sequences into latent vector z.
     """
 
-    def __init__(self, input_dim, hidden_dim, latent_dim):
+    def __init__(self, input_dim, hidden_dim, latent_dim, num_layers=1):
         """
         Args:
             input_dim: number of input features (e.g., time + normalized flux + dummy 1)
             hidden_dim: hidden size of GRU
             latent_dim: dimension of latent z vector
         """
+        # NEEDS TO BE BAND AWARE!
         super().__init__()
+
+        self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM)
         self.gru = nn.GRU(
-            input_dim,
+            input_dim+BAND_EMB_DIM,
             hidden_dim,
+            num_layers=num_layers,
             batch_first=True,
-            bidirectional=False
+            bidirectional=False,
         )
 
         self.fc_mean = nn.Linear(hidden_dim, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
 
-    def forward(self, x):
+    def forward(self, x, band_idx):
         """
         Args:
             x: (B, T, input_dim) input sequence
@@ -246,6 +253,8 @@ class GRUEncoder(nn.Module):
             z_mean: mean of latent distribution (B, latent_dim)
             z_logvar: log-variance of latent distribution (B, latent_dim)
         """
+        e_b = self.band_emb(band_idx[:, :, 0])
+        x = torch.cat([x, e_b], dim=-1)
         _, h_n = self.gru(x)  # h_n: (1, B, hidden_dim)
         h_n = h_n.squeeze(0)  # (B, hidden_dim)
 

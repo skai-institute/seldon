@@ -1,6 +1,6 @@
 import pytorch_lightning as pl
 import torch
-
+import matplotlib.pyplot as plt
 
 
 class GRUVAEExperiment(pl.LightningModule):
@@ -29,17 +29,18 @@ class GRUVAEExperiment(pl.LightningModule):
 
         self.save_hyperparameters(ignore=["model"])
 
-    def forward(self, x_input, t_grid, band_idx_full):
+    def forward(self, x_input, t_grid, band_idx_part, band_idx_full):
         """
         Forward pass: reconstruct flux values over full time grid.
         """
-        return self.model(x_input, t_grid, band_idx_full)
+        return self.model(x_input, t_grid, band_idx_part, band_idx_full)
 
 
     def training_step(self, batch, batch_idx):
         out = self.model(
             x=batch["x_input"],
             t=batch["time_full"],
+            band_idx_part=batch["band_idx"],
             band_idx_full=batch["band_idx_full"]
         )
 
@@ -60,6 +61,7 @@ class GRUVAEExperiment(pl.LightningModule):
         out = self.model(
             x=batch["x_input"],
             t=batch["time_full"],
+            band_idx_part=batch["band_idx"],
             band_idx_full=batch["band_idx_full"]
         )
 
@@ -73,7 +75,7 @@ class GRUVAEExperiment(pl.LightningModule):
         )
 
         self.log("val_loss", loss, on_step=False, on_epoch=True)
-        return loss
+        return loss, out, batch
 
     def compute_loss(self, recon, target, time, mask, z_mean, z_logvar):
         """
@@ -87,22 +89,22 @@ class GRUVAEExperiment(pl.LightningModule):
         kl = -0.5 * torch.mean(1 + z_logvar - z_mean.pow(2) - z_logvar.exp())
 
         # === Smoothness penalty ===
-        def compute_smoothness(y, t):
-            dy = y[:, 1:] - y[:, :-1]
-            dt = t[:, 1:] - t[:, :-1]
-            d1 = dy / (dt + 1e-6)
-            d2 = d1[:, 1:] - d1[:, :-1]
-            dt2 = dt[:, 1:] + dt[:, :-1]
-            return torch.mean((d2 / (dt2 + 1e-6)) ** 2)
+        #def compute_smoothness(y, t):
+        #    dy = y[:, 1:] - y[:, :-1]
+        #    dt = t[:, 1:] - t[:, :-1]
+        #    d1 = dy / (dt + 1e-6)
+        #    d2 = d1[:, 1:] - d1[:, :-1]
+        #    dt2 = dt[:, 1:] + dt[:, :-1]
+        #    return torch.mean((d2 / (dt2 + 1e-6)) ** 2)
 
-        smooth_penalty = compute_smoothness(recon, time)
+        #smooth_penalty = compute_smoothness(recon, time)
 
         total_loss = (
             in_loss +
             self.out_sample_lambda * out_loss +
-            self.kl_weight * kl +
-            self.smooth_weight * smooth_penalty
-        )
+            self.kl_weight * kl)# +
+         #   self.smooth_weight * smooth_penalty
+        #)
 
         return total_loss
 
@@ -111,3 +113,50 @@ class GRUVAEExperiment(pl.LightningModule):
         Optimizer configuration.
         """
         return torch.optim.Adam(self.parameters(), lr=self.lr)
+    
+    def validation_epoch_end(self, outputs):
+
+
+        loss, out, batch = outputs[0]
+        out_time = torch.linspace(0,1,100, dtype=torch.float32)
+        
+        
+        squared_error = ((batch["flux_full"] - out["reconstructed"])**2).mean(axis=1).detach().cpu().numpy()
+        best_idx = squared_error.argmin()
+        worst_idx = squared_error.argmax()
+        #out = self.model(
+        #    x=batch["x_input"],
+        #    t=out_time.unsqueeze(1).unsqueeze(0).expand(len(batch['x_input']), 100, 1).to(self.device),
+        #    band_idx_part=batch["band_idx"],
+        #    band_idx_full=batch["band_idx_full"] # Needs to be bands for decoding per time!
+        #)
+
+        for idx, name in zip((best_idx, worst_idx),("Best","Worst")):
+            fig = plt.figure()
+            length = batch["lengths"][idx].detach().cpu().numpy()
+            flux = batch["flux_full"][idx].detach().cpu().numpy()[:length, 0]
+            flux_err = batch["flux_err_full"][idx].detach().cpu().numpy()[:length, 0]
+            time = batch["time_full"][idx].detach().cpu().numpy()[:length, 0]
+            band = batch["band_idx_full"][idx].detach().cpu().numpy()[:length, 0]
+            colors = ["#e41a1c","#377eb8","#4daf4a","#984ea3","#ff7f00","#ffff33"]
+            for j in range(6):
+                bands = torch.ones(100, dtype=torch.long).unsqueeze(1).unsqueeze(0)*j
+                out = self.model(
+                    x=batch["x_input"],
+                    t=out_time.unsqueeze(1).unsqueeze(0).expand(len(batch['x_input']), 100, 1).to(self.device),
+                    band_idx_part=batch["band_idx"],
+                    band_idx_full=bands.expand(len(batch['x_input']), 100, 1).to(self.device) # Needs to be bands for decoding per time!
+                )
+
+
+                reconstruction = out["reconstructed"][best_idx].detach().cpu().numpy()[:, 0]
+                mask = band == j
+
+                plt.errorbar(time[mask], flux[mask], yerr=flux_err[mask], marker='o', label=f'band {j}', ls='none', color=colors[j])
+                plt.plot(out_time, reconstruction, label='Prediction', color=colors[j])
+            plt.legend()
+            plt.xlabel("Scaled Time")
+            plt.ylabel("Scaled Flux")
+            plt.xlim(0, time.max())
+
+            self.logger.experiment.add_figure(name, fig, self.current_epoch)
