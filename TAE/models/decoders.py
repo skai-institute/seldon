@@ -230,8 +230,8 @@ class ConvDecoder(BaseDecoder):
         return outputs
 
 NUM_BANDS    = 6          # keep the same constants you use elsewhere
-BAND_EMB_DIM = 4
-SIG_BASIS_K  = 4          # number of sigmoid bases
+BAND_EMB_DIM = 6
+SIG_BASIS_K  = 8          # number of sigmoid bases
 
 class MLPBandDecoder(nn.Module):
     def __init__(self, latent: int, hidden: int = 128, K: int = SIG_BASIS_K):

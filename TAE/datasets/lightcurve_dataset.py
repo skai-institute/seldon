@@ -10,6 +10,8 @@ import torch
 from torch.utils.data import Dataset
 import torch
 from enum import Enum
+from TAE.util import fill_config, extract_curves_from_filtered_data
+
 
 
 TIME = 0
@@ -145,7 +147,7 @@ class SNLightCurveDataset(Dataset):
     def apply_time_normalization(self, part_time, full_time):
 
         t_min = part_time.min()
-        t_rng = 500
+        t_rng = 100
         for arr in (part_time, full_time):
             arr -= t_min
             arr /= t_rng
@@ -289,12 +291,13 @@ class SNDataModule(pl.LightningDataModule):
     Handles train/val/test splits and DataLoader creation.
     """
 
-    def __init__(self, full_light_curves, batch_size=32, num_workers=4,
+    def __init__(self, lightcurve_path=".", batch_size=32, num_workers=4,
                  normalization="max_partial_scalar", min_points=5,
-                 augmentation="mixed", num_aug_per_curve=3, min_obs_fraction=0.5):
+                 augmentation="mixed", num_aug_per_curve=3, min_obs_fraction=0.5,
+                 class_filter=None):
         super().__init__()
         self.min_obs_fraction = min_obs_fraction
-        self.full_light_curves = full_light_curves
+        self.lightcurve_path = lightcurve_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.normalization = normalization
@@ -302,6 +305,16 @@ class SNDataModule(pl.LightningDataModule):
         self.augmentation = augmentation
         self.num_aug_per_curve = num_aug_per_curve
         self.dataset = None
+        self.class_filter = class_filter
+
+        with open(lightcurve_path, "rb") as f:
+            filtered_data = pickle.load(f)
+
+        self.full_light_curves = extract_curves_from_filtered_data(
+            filtered_data,
+            min_points=min_points,
+            class_filter=class_filter
+        )
 
     def setup(self, stage=None):
         if self.dataset is None:

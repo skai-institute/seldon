@@ -1,15 +1,14 @@
 dataset:
   name: SNDataModule
   config:
-    lightcurve_path: TAE/data/cleaned_training_data.pkl  
-    class_filter: SNIa                             
-    full_light_curves: null                           
-    band_map: {"g": 0, "r": 1, "i": 2, "z": 3, "y": 4, "u": 5}
+    lightcurve_path: TAE/data/cleaned_data_merged.pkl  
+    class_filter: 
+      - 'SNIa'                        
     normalization: max_partial_scalar
-    min_points: 4
+    min_points: 3
     augmentation: full
-    num_aug_per_curve: 11
-    batch_size: 32
+    num_aug_per_curve: 2
+    batch_size: 64
     num_workers: 4
    
 
@@ -20,20 +19,25 @@ model_params:
     input_dim: 3
     hidden_dim: 64
     latent_dim: 8
+    kl_weight: 0.0
     #num_bands: 6
     #band_embedding_dim: 4
 
 exp_params:
   name: GRUVAEExperiment
   config:
-    kl_weight: 0.001
-    lr: 0.001
-    num_epochs: 100
-    batch_size: 32
+    params:
+      dataset: SNDataModule
+      figures: []
+      optimizer: 
+        name: "Adam"
+        config:
+          LR: 0.001
+          weight_decay: 0.0 #1e-5
     # dataset will be filled by the fill_config function
 
 trainer_params:
-  max_epochs: 100
+  max_epochs: 200
   accelerator: "gpu"
   devices: 1
 

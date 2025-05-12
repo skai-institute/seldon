@@ -213,7 +213,7 @@ class ConvEncoder(BaseEncoder):
 # ==========================================
 
 NUM_BANDS    = 6          # keep the same constants you use elsewhere
-BAND_EMB_DIM = 4
+BAND_EMB_DIM = 6
 
 class GRUEncoder(nn.Module):
     """

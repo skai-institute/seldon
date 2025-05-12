@@ -11,9 +11,10 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from TAE.datasets.dataset_factory import get_module as get_dataset
 from TAE.experiments.factory import get_module as get_experiment
 from TAE.models.factory import get_module
-from TAE.util import fill_config, extract_curves_from_filtered_data
-import pickle
+from TAE.util import fill_config
 from TAE.datasets import dataset_factory
+import os
+os.environ['HYDRA_FULL_ERROR'] = '1'
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 def main(cfg: DictConfig) -> None:
     cfg = fill_config(cfg)
     print(OmegaConf.to_yaml(cfg))  # Optional: print config for verification
-    config = OmegaConf.to_container(cfg, resolve=True)
+    config = OmegaConf.to_container(cfg)
 
     # === Set seed ===
     seed = cfg["logging_params"]["manual_seed"]
@@ -48,30 +49,9 @@ def main(cfg: DictConfig) -> None:
     # === Load model ===
     model = get_module(cfg["model_params"]["name"], config["model_params"]["config"])
 
-    # === Load and extract light curves ===
-    with open(cfg["dataset"]["config"]["lightcurve_path"], "rb") as f:
-        filtered_data = pickle.load(f)
-
-    light_curves = extract_curves_from_filtered_data(
-        filtered_data,
-        min_points=cfg["dataset"]["config"]["min_points"],
-        class_filter=cfg["dataset"]["config"]["class_filter"]
-    )
 
     # === Prepare datamodule manually ===
-    dataset_class = dataset_factory.MODULES[cfg["dataset"]["name"]]
-
-    data = dataset_class(
-        full_light_curves=light_curves,
-        normalization=cfg["dataset"]["config"]["normalization"],
-        min_points=cfg["dataset"]["config"]["min_points"],
-        augmentation=cfg["dataset"]["config"].get("augmentation", "mixed"),
-        num_aug_per_curve=cfg["dataset"]["config"].get("num_aug_per_curve", 3),
-        batch_size=cfg["dataset"]["config"]["batch_size"],
-        num_workers=cfg["dataset"]["config"]["num_workers"]
-    )
-
-
+    data = get_dataset(config["dataset"]["name"], config["dataset"]["config"])
 
     # === Load experiment wrapper ===
     experiment = get_experiment(
@@ -80,7 +60,8 @@ def main(cfg: DictConfig) -> None:
     )
 
     # === Log and run ===
-   # tb_logger.log_hyperparams(params=cfg)
+    tb_logger.log_hyperparams(params=cfg)
+    logger.info(f"{tb_logger.save_dir}")
 
     runner = Trainer(
         enable_checkpointing=True,
