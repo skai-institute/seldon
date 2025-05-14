@@ -6,8 +6,7 @@ from dataclasses import dataclass
 
 from .encoders import GRUEncoder
 from .decoders import MLPBandDecoder 
-
-
+from .parametric_decoders import BazinDecoder
 
 
 @dataclass
@@ -71,7 +70,7 @@ class BandAwareAutoencoder(nn.Module):
     This model uses a GRU encoder and an MLP decoder.
     """
 
-    def __init__(self, input_dim=3, hidden_dim=64, latent_dim=8, kl_weight=0.001, out_sample_lambda=0.8, smooth_weight=1.0):
+    def __init__(self, input_dim=3, hidden_dim=64, latent_dim=8, kl_weight=0.001, out_sample_lambda=0.8, smooth_weight=1.0, decoder="MLP", **kwargs):
         """
         Args:
             input_dim: number of input features (e.g., time + flux + dummy 1)
@@ -80,7 +79,14 @@ class BandAwareAutoencoder(nn.Module):
         """
         super().__init__()
         self.encoder = GRUEncoder(input_dim, hidden_dim, latent_dim)
-        self.decoder = MLPBandDecoder(latent_dim)  # hidden_dim inside decoder is default (128)
+        #self.decoder = MLPBandDecoder(latent_dim, )  # hidden_dim inside decoder is default (128)
+        
+        if decoder == "MLP":
+            self.decoder = MLPBandDecoder(latent_dim, **kwargs)
+        elif decoder == "Bazin":
+            self.decoder = BazinDecoder(latent_dim, **kwargs)
+        else:
+            raise NameError("Decoder must be MLP or Bazin.")
 
         self.kl_weight = kl_weight
         self.out_sample_lambda = out_sample_lambda

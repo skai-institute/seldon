@@ -10,6 +10,7 @@ dataset:
     num_aug_per_curve: 2
     batch_size: 64
     num_workers: 4
+
    
 
 
@@ -22,6 +23,7 @@ model_params:
     kl_weight: 0.0
     #num_bands: 6
     #band_embedding_dim: 4
+    decoder: "Bazin"
 
 exp_params:
   name: GRUVAEExperiment
