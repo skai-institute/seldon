@@ -14,9 +14,11 @@ from TAE.models.factory import get_module
 from TAE.util import fill_config
 from TAE.datasets import dataset_factory
 import os
-os.environ['HYDRA_FULL_ERROR'] = '1'
+
+os.environ["HYDRA_FULL_ERROR"] = "1"
 
 logger = logging.getLogger(__name__)
+
 
 @hydra.main(config_path="TAE/configs", config_name="light_curve_autoencoder")
 def main(cfg: DictConfig) -> None:
@@ -49,7 +51,6 @@ def main(cfg: DictConfig) -> None:
     # === Load model ===
     model = get_module(cfg["model_params"]["name"], config["model_params"]["config"])
 
-
     # === Prepare datamodule manually ===
     data = get_dataset(config["dataset"]["name"], config["dataset"]["config"])
 
@@ -73,6 +74,7 @@ def main(cfg: DictConfig) -> None:
 
     logger.info(f"======= Training {cfg['model_params']['name']} =======")
     runner.fit(experiment, data)
+
 
 if __name__ == "__main__":
     sys.argv.append("hydra.run.dir=./")

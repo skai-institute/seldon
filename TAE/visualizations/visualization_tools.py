@@ -9,7 +9,9 @@ import matplotlib.pyplot as plt
 import os
 
 
-def plot_enhanced_predictions(model, dataset, index, device=None, fractions=[0.1, 0.3, 0.7, 1.0]):
+def plot_enhanced_predictions(
+    model, dataset, index, device=None, fractions=[0.1, 0.3, 0.7, 1.0]
+):
     """
     Visualizes reconstruction and peak prediction for a single light curve.
 
@@ -26,29 +28,39 @@ def plot_enhanced_predictions(model, dataset, index, device=None, fractions=[0.1
 
     # === Load sample ===
     sample = dataset[index]
-    norm_info = sample['norm_info']
-    t_full = sample['time_full'].squeeze().numpy()
-    flux_full = sample['flux_full'].squeeze().numpy()
+    norm_info = sample["norm_info"]
+    t_full = sample["time_full"].squeeze().numpy()
+    flux_full = sample["flux_full"].squeeze().numpy()
     flux_err_full = sample.get("flux_err_full", None)
     if flux_err_full is not None:
         flux_err_full = flux_err_full.squeeze().numpy()
 
-    true_peak_time = sample['peak_time'].item()
-    true_peak_flux = sample['peak_flux'].item()
+    true_peak_time = sample["peak_time"].item()
+    true_peak_flux = sample["peak_flux"].item()
 
     cmap = plt.cm.get_cmap("tab10", len(fractions))
-    linestyles = ['--', '-.', ':', (0, (3, 1, 1, 1))]
-    markers = ['o', '^', 's', 'P']
+    linestyles = ["--", "-.", ":", (0, (3, 1, 1, 1))]
+    markers = ["o", "^", "s", "P"]
 
     fig, ax = plt.subplots(figsize=(13, 6))
 
     # === Full light curve
     ax.errorbar(
-        t_full, flux_full, yerr=flux_err_full if flux_err_full is not None else None,
-        fmt='x', color='gray', alpha=0.3, label="Full Curve"
+        t_full,
+        flux_full,
+        yerr=flux_err_full if flux_err_full is not None else None,
+        fmt="x",
+        color="gray",
+        alpha=0.3,
+        label="Full Curve",
     )
 
-    ax.axvline(x=true_peak_time, color='green', linestyle='-', label=f"True Peak: {true_peak_time:.1f}d")
+    ax.axvline(
+        x=true_peak_time,
+        color="green",
+        linestyle="-",
+        label=f"True Peak: {true_peak_time:.1f}d",
+    )
 
     # === Dense time grid for prediction
     t_dense = torch.linspace(min(t_full), max(t_full), 200).unsqueeze(1).to(device)
@@ -62,7 +74,9 @@ def plot_enhanced_predictions(model, dataset, index, device=None, fractions=[0.1
 
         with torch.no_grad():
             z = model.encode(x_partial)
-            full_lengths = torch.full((z.size(0),), t_dense.size(0), dtype=torch.long, device=z.device)
+            full_lengths = torch.full(
+                (z.size(0),), t_dense.size(0), dtype=torch.long, device=z.device
+            )
             recon = model.decode(z, t_dense.unsqueeze(0), full_lengths)
 
         recon = recon[0].squeeze().cpu().numpy()
@@ -85,9 +99,19 @@ def plot_enhanced_predictions(model, dataset, index, device=None, fractions=[0.1
 
         color = cmap(i)
 
-        ax.plot(t_dense_np, recon_denorm, linestyle=linestyles[i % len(linestyles)],
-                color=color, label=f"{int(frac * 100)}% Recon (Peak: {pred_peak_time:.1f}d)")
-        ax.axvline(pred_peak_time, color=color, linestyle=linestyles[i % len(linestyles)], linewidth=1)
+        ax.plot(
+            t_dense_np,
+            recon_denorm,
+            linestyle=linestyles[i % len(linestyles)],
+            color=color,
+            label=f"{int(frac * 100)}% Recon (Peak: {pred_peak_time:.1f}d)",
+        )
+        ax.axvline(
+            pred_peak_time,
+            color=color,
+            linestyle=linestyles[i % len(linestyles)],
+            linewidth=1,
+        )
 
         # === New points only
         t_part = sample["time_partial"][:cutoff].squeeze().numpy()
@@ -109,38 +133,67 @@ def plot_enhanced_predictions(model, dataset, index, device=None, fractions=[0.1
         seen_indices.update(range(cutoff))
 
         if ferr_part is not None:
-            ax.errorbar(t_part[new_mask], f_part[new_mask], yerr=ferr_part[new_mask],
-                        fmt=markers[i % len(markers)], capsize=3, color=color,
-                        label=f"{int(frac * 100)}% Partial Obs")
+            ax.errorbar(
+                t_part[new_mask],
+                f_part[new_mask],
+                yerr=ferr_part[new_mask],
+                fmt=markers[i % len(markers)],
+                capsize=3,
+                color=color,
+                label=f"{int(frac * 100)}% Partial Obs",
+            )
         else:
-            ax.scatter(t_part[new_mask], f_part[new_mask], s=50, edgecolors='black',
-                       marker=markers[i % len(markers)], color=color,
-                       label=f"{int(frac * 100)}% Partial Obs")
+            ax.scatter(
+                t_part[new_mask],
+                f_part[new_mask],
+                s=50,
+                edgecolors="black",
+                marker=markers[i % len(markers)],
+                color=color,
+                label=f"{int(frac * 100)}% Partial Obs",
+            )
 
-        predictions.append({
-            "fraction": frac,
-            "peak_time": pred_peak_time,
-            "peak_flux": pred_peak_flux,
-            "time_error": abs(pred_peak_time - true_peak_time),
-            "flux_error": abs(pred_peak_flux - true_peak_flux) / (true_peak_flux + 1e-6) * 100
-        })
+        predictions.append(
+            {
+                "fraction": frac,
+                "peak_time": pred_peak_time,
+                "peak_flux": pred_peak_flux,
+                "time_error": abs(pred_peak_time - true_peak_time),
+                "flux_error": abs(pred_peak_flux - true_peak_flux)
+                / (true_peak_flux + 1e-6)
+                * 100,
+            }
+        )
 
     # === Summary table
-    textstr = f"True Peak: {true_peak_time:.1f}d, {true_peak_flux:.1f} flux\n" + "-" * 40 + "\n"
+    textstr = (
+        f"True Peak: {true_peak_time:.1f}d, {true_peak_flux:.1f} flux\n"
+        + "-" * 40
+        + "\n"
+    )
     textstr += f"{'Frac':>6s}  {'Time':>8s}  {'Error':>8s}  {'Flux Err%':>10s}\n"
     for p in predictions:
         textstr += f"{int(p['fraction'] * 100):3d}%   {p['peak_time']:6.1f}d   {p['time_error']:6.1f}d   {p['flux_error']:8.1f}%\n"
 
-    props = dict(boxstyle='round', facecolor='white', alpha=0.7)
-    ax.text(0.02, 0.02, textstr, transform=ax.transAxes, fontsize=9,
-            verticalalignment='bottom', bbox=props, family='monospace')
+    props = dict(boxstyle="round", facecolor="white", alpha=0.7)
+    ax.text(
+        0.02,
+        0.02,
+        textstr,
+        transform=ax.transAxes,
+        fontsize=9,
+        verticalalignment="bottom",
+        bbox=props,
+        family="monospace",
+    )
 
-    ax.set_title(f"Light Curve {index} — Reconstructions and Peak Predictions", fontsize=14)
+    ax.set_title(
+        f"Light Curve {index} — Reconstructions and Peak Predictions", fontsize=14
+    )
     ax.set_xlabel("Days Since First Observation")
     ax.set_ylabel("FLUXCAL")
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8, loc='upper right')
+    ax.legend(fontsize=8, loc="upper right")
     plt.tight_layout()
 
     return fig, predictions
-

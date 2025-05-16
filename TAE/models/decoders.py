@@ -5,6 +5,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+
 class BaseDecoder(nn.Module):
     """Base decoder specifying minimal init protocol."""
 
@@ -229,50 +230,57 @@ class ConvDecoder(BaseDecoder):
         # outputs = outputs.view(-1, 3, self.output_dim, self.output_dim)
         return outputs
 
-NUM_BANDS    = 6          # keep the same constants you use elsewhere
+
+NUM_BANDS = 6  # keep the same constants you use elsewhere
 BAND_EMB_DIM = 6
-SIG_BASIS_K  = 8          # number of sigmoid bases
+SIG_BASIS_K = 8  # number of sigmoid bases
+
 
 class MLPBandDecoder(nn.Module):
     def __init__(self, latent: int, hidden: int = 128, K: int = SIG_BASIS_K):
         super().__init__()
-        self.K        = K
+        self.K = K
         self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM)
 
-        inp = latent + BAND_EMB_DIM                       # concat z‖e_b
+        inp = latent + BAND_EMB_DIM  # concat z‖e_b
         self.mlp = nn.Sequential(
-            nn.Linear(inp, hidden), nn.GELU(),
-            nn.Linear(hidden, hidden), nn.GELU(),
-            nn.Linear(hidden, NUM_BANDS * 3 * K)                      # [a|c|s] for all bases
+            nn.Linear(inp, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, NUM_BANDS * 3 * K),  # [a|c|s] for all bases
         )
 
-  
         nn.init.uniform_(self.mlp[-1].weight, -0.2, 0.2)
 
-    def forward(self, z, t, band_idx):          # t:(B,T,1)
-        e_b   = self.band_emb(band_idx[:, :, 0])        # (B,seq,E)
+    def forward(self, z, t, band_idx):  # t:(B,T,1)
+        e_b = self.band_emb(band_idx[:, :, 0])  # (B,seq,E)
         z = z.unsqueeze(1).expand(z.shape[0], e_b.shape[1], z.shape[1])
-        #import pdb; pdb.set_trace()
-        params = self.mlp(torch.cat([z, e_b], dim=-1))  # (B, 3K) # Should be (B, band, 3k)
-        #params = torch.cat([mlp(z).unsqueeze(1) for mlp in self.mlps], dim=1) # perform with each mlp
-        #params = self.mlp(z) # (B, band, 3K)
-        #import pdb; pdb.set_trace()
-        params = params.view(params.shape[0], params.shape[1], NUM_BANDS, 3*self.K)             # (B,band,3K)
-        params = torch.gather(params, 2, band_idx.unsqueeze(2).expand(-1, -1, 1, 3*self.K)).squeeze(2).view(params.shape[0], -1, self.K, 3) # (B, K, 3)
-        
-        #params = torch.gather(params, 1, band_idx)
+        # import pdb; pdb.set_trace()
+        params = self.mlp(
+            torch.cat([z, e_b], dim=-1)
+        )  # (B, 3K) # Should be (B, band, 3k)
+        # params = torch.cat([mlp(z).unsqueeze(1) for mlp in self.mlps], dim=1) # perform with each mlp
+        # params = self.mlp(z) # (B, band, 3K)
+        # import pdb; pdb.set_trace()
+        params = params.view(
+            params.shape[0], params.shape[1], NUM_BANDS, 3 * self.K
+        )  # (B,band,3K)
+        params = (
+            torch.gather(params, 2, band_idx.unsqueeze(2).expand(-1, -1, 1, 3 * self.K))
+            .squeeze(2)
+            .view(params.shape[0], -1, self.K, 3)
+        )  # (B, K, 3)
+
+        # params = torch.gather(params, 1, band_idx)
         # NEEDS ANOTHER DIMENSION TO INDEX EACH BAND!
 
-        a = params[:, :, :, 0] # (B,seq,K)
-        c = params[:, :, :, 1] # (B,seq,K)
-        s = params[:, :, :, 2] # (B,seq,K)
-        #import pdb; pdb.set_trace()
+        a = params[:, :, :, 0]  # (B,seq,K)
+        c = params[:, :, :, 1]  # (B,seq,K)
+        s = params[:, :, :, 2]  # (B,seq,K)
+        # import pdb; pdb.set_trace()
         # ---------- broadcast & sum ----------------------------------
-        t_exp = t.expand(-1, -1, self.K)                # (B,T,K)
+        t_exp = t.expand(-1, -1, self.K)  # (B,T,K)
         basis = torch.sigmoid((t_exp - c) * s)  # (B,T,K)
-        out   = (a * basis).sum(-1, keepdim=True)            # (B,T,1)
+        out = (a * basis).sum(-1, keepdim=True)  # (B,T,1)
         return out
-
-
-
-    

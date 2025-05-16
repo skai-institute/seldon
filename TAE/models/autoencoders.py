@@ -5,7 +5,7 @@ from torch import nn
 from dataclasses import dataclass
 
 from .encoders import GRUEncoder
-from .decoders import MLPBandDecoder 
+from .decoders import MLPBandDecoder
 from .parametric_decoders import BazinDecoder
 
 
@@ -15,6 +15,7 @@ class AEOutput:
     reconstruction: torch.Tensor
     latent_observation: torch.Tensor
     mask: torch.Tensor
+
 
 class Autoencoder(nn.Module):
     def __init__(self, input_dim, latent_dim=4):  # Reduce latent space to 4
@@ -47,19 +48,16 @@ class Autoencoder(nn.Module):
             mask=mask,
             reconstruction=reconstructed,
             latent_observation=latent,
-
         )
-    
+
     def loss_function(self, result):
 
         train_loss = self.criterion(
-            result.reconstruction * result.mask, 
+            result.reconstruction * result.mask,
             result.observation * result.mask,
-            )
-        
-        return {'loss': train_loss}
+        )
 
-
+        return {"loss": train_loss}
 
 
 class BandAwareAutoencoder(nn.Module):
@@ -70,7 +68,17 @@ class BandAwareAutoencoder(nn.Module):
     This model uses a GRU encoder and an MLP decoder.
     """
 
-    def __init__(self, input_dim=3, hidden_dim=64, latent_dim=8, kl_weight=0.001, out_sample_lambda=0.8, smooth_weight=1.0, decoder="MLP", **kwargs):
+    def __init__(
+        self,
+        input_dim=3,
+        hidden_dim=64,
+        latent_dim=8,
+        kl_weight=0.001,
+        out_sample_lambda=0.8,
+        smooth_weight=1.0,
+        decoder="MLP",
+        **kwargs
+    ):
         """
         Args:
             input_dim: number of input features (e.g., time + flux + dummy 1)
@@ -79,8 +87,8 @@ class BandAwareAutoencoder(nn.Module):
         """
         super().__init__()
         self.encoder = GRUEncoder(input_dim, hidden_dim, latent_dim)
-        #self.decoder = MLPBandDecoder(latent_dim, )  # hidden_dim inside decoder is default (128)
-        
+        # self.decoder = MLPBandDecoder(latent_dim, )  # hidden_dim inside decoder is default (128)
+
         if decoder == "MLP":
             self.decoder = MLPBandDecoder(latent_dim, **kwargs)
         elif decoder == "Bazin":
@@ -107,11 +115,7 @@ class BandAwareAutoencoder(nn.Module):
         z, z_mean, z_logvar = self.encoder(x, band_idx_part)
         reconstructed = self.decoder(z, t, band_idx_full)
 
-        return {
-            "reconstructed": reconstructed,
-            "z_mean": z_mean,
-            "z_logvar": z_logvar
-        }
+        return {"reconstructed": reconstructed, "z_mean": z_mean, "z_logvar": z_logvar}
 
     def encode(self, x, band_idx):
         """
@@ -127,7 +131,6 @@ class BandAwareAutoencoder(nn.Module):
         """
         with torch.no_grad():
             return self.decoder(z, t, band_idx)
-        
 
     def loss_function(self, recon, target, time, mask, z_mean, z_logvar):
         """
@@ -137,25 +140,27 @@ class BandAwareAutoencoder(nn.Module):
         mask = mask.unsqueeze(-1)
 
         in_loss = (squared_error * mask).sum()
-        out_loss = (squared_error * (~mask)).sum() * ((~mask).sum() + 1e-6) / (mask.sum() + 1e-6)
+        out_loss = (
+            (squared_error * (~mask)).sum()
+            * ((~mask).sum() + 1e-6)
+            / (mask.sum() + 1e-6)
+        )
         kl = -0.5 * torch.mean(1 + z_logvar - z_mean.pow(2) - z_logvar.exp())
 
         total_loss = (
-            in_loss +
-            self.out_sample_lambda * out_loss +
-            self.kl_weight * kl)# +
-         #   self.smooth_weight * smooth_penalty
-        #)
+            in_loss + self.out_sample_lambda * out_loss + self.kl_weight * kl
+        )  # +
+        #   self.smooth_weight * smooth_penalty
+        # )
 
-        return {"loss":total_loss}
-    
+        return {"loss": total_loss}
 
     def training_step(self, batch, batch_idx):
         out = self(
             x=batch["x_input"],
             t=batch["time_full"],
             band_idx_part=batch["band_idx"],
-            band_idx_full=batch["band_idx_full"]
+            band_idx_full=batch["band_idx_full"],
         )
 
         loss = self.loss_function(
@@ -164,8 +169,7 @@ class BandAwareAutoencoder(nn.Module):
             time=batch["time_full"],
             mask=batch["in_sample_mask"],
             z_mean=out["z_mean"],
-            z_logvar=out["z_logvar"]
+            z_logvar=out["z_logvar"],
         )
 
-        
         return loss

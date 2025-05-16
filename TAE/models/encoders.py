@@ -212,8 +212,9 @@ class ConvEncoder(BaseEncoder):
 # Encoder: GRUEncoder (single-band, no band_idx)
 # ==========================================
 
-NUM_BANDS    = 6          # keep the same constants you use elsewhere
+NUM_BANDS = 6  # keep the same constants you use elsewhere
 BAND_EMB_DIM = 6
+
 
 class GRUEncoder(nn.Module):
     """
@@ -233,7 +234,7 @@ class GRUEncoder(nn.Module):
 
         self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM)
         self.gru = nn.GRU(
-            input_dim+BAND_EMB_DIM,
+            input_dim + BAND_EMB_DIM,
             hidden_dim,
             num_layers=num_layers,
             batch_first=True,

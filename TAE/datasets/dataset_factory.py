@@ -1,16 +1,17 @@
 import typing
 
 from TAE.datasets.YSE_json_dataset import JSONDataLoader
-#from TAE.datasets.datasets import RandomData
+
+# from TAE.datasets.datasets import RandomData
 from TAE.datasets.lightcurve_dataset import SNLightCurveDataset, SNDataModule
-from TAE.util import extract_curves_from_filtered_data  
+from TAE.util import extract_curves_from_filtered_data
 import pickle
 from pathlib import Path
 
 MODULES = {
     "YSEData": JSONDataLoader,
     "SNDataModule": SNDataModule,
-    "SNLightCurveDataset": SNLightCurveDataset, 
+    "SNLightCurveDataset": SNLightCurveDataset,
 }
 
 # TODO: switch it back when the cluster updated to python 3.8
@@ -18,7 +19,6 @@ MODULES = {
 # CONFIG_KEY: typing.Final[str] = "config"
 NAME_KEY: str = "name"
 CONFIG_KEY: str = "config"
-
 
 
 # In dataset_factory.py, modify the get_module function:
@@ -34,4 +34,3 @@ def get_module(name, config):
         if isinstance(value, dict) and NAME_KEY in value and CONFIG_KEY in value:
             config[key] = get_module(value[NAME_KEY], value[CONFIG_KEY])
     return cls(**config)
-

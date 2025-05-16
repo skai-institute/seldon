@@ -1,8 +1,4 @@
-from TAE.models.decoders import (
-    Label_MLPDecoder,
-    ConvDecoder,
-    MLPBandDecoder 
-)
+from TAE.models.decoders import Label_MLPDecoder, ConvDecoder, MLPBandDecoder
 
 
 from TAE.models.encoders import Label_MLPEncoder, MLPEncoder, ConvEncoder
@@ -14,7 +10,8 @@ from TAE.models.scheduler import (
 )
 from TAE.models.vae_label import VAELabel
 from TAE.models.autoencoders import Autoencoder, BandAwareAutoencoder
-#from TAE.experiments.autoencoder_experiment import Experiment, AutoencoderExperiment
+
+# from TAE.experiments.autoencoder_experiment import Experiment, AutoencoderExperiment
 
 from inspect import signature
 
@@ -23,7 +20,7 @@ CONFIG_KEY: str = "config"
 
 MODULES = {
     "MLPEncoder": MLPEncoder,
-    "MLPBandDecoder": MLPBandDecoder, 
+    "MLPBandDecoder": MLPBandDecoder,
     "AnnealingLinearScheduler": AnnealingLinearScheduler,
     "ConstrainedExponentialSchedulerMaLagrange": ConstrainedExponentialSchedulerMaLagrange,
     "RAdam": RAdam,
@@ -37,14 +34,17 @@ MODULES = {
     "VAELabel": VAELabel,
     "Autoencoder": Autoencoder,
     "BandAwareAutoencoder": BandAwareAutoencoder,
-    #"Experiment": Experiment,
-    #"AutoencoderExperiment": AutoencoderExperiment,
+    # "Experiment": Experiment,
+    # "AutoencoderExperiment": AutoencoderExperiment,
 }
+
 
 def get_module(name: str, config) -> object:
     """Recursively deserializes objects registered in MODULES."""
     if name not in MODULES:
-        raise KeyError(f"{name} not found in registered modules. Available are {MODULES.keys()}.")
+        raise KeyError(
+            f"{name} not found in registered modules. Available are {MODULES.keys()}."
+        )
 
     cls = MODULES[name]
     for key, value in config.items():

@@ -2,13 +2,14 @@ from inspect import signature
 from TAE.experiments.experiment import (
     Experiment,
 )
-#from TAE.experiments.autoencoder_experiment import AutoencoderExperiment
+
+# from TAE.experiments.autoencoder_experiment import AutoencoderExperiment
 from TAE.experiments.autoencoder_experiment import GRUVAEExperiment
 
 MODULES = {
-    #"Experiment": Experiment,
-    #"AutoencoderExperiment": AutoencoderExperiment,
-    "GRUVAEExperiment": GRUVAEExperiment, 
+    # "Experiment": Experiment,
+    # "AutoencoderExperiment": AutoencoderExperiment,
+    "GRUVAEExperiment": GRUVAEExperiment,
 }
 
 # MODULES.update(model_modules)
@@ -39,4 +40,3 @@ def get_module(name: str, config) -> Experiment:
         elif isinstance(value, dict) and NAME_KEY in value and CONFIG_KEY in value:
             config[key] = get_module(value[NAME_KEY], value[CONFIG_KEY])
     return cls(**config)
-
