@@ -98,3 +98,57 @@ class SigmoidBasisDecoder(nn.Module):
         # Weighted sum of bases → (B, T, 1)
         out = torch.sum(weights * basis, dim=-1, keepdim=True)
         return out
+
+class PiecewiseBandDecoder(nn.Module):
+    """
+    Band aware piece‑wise light-curve model (Villar+19 Eq. 1).
+    Predicts 7 parameters:  A, β, t0, log τ_r, log τ_f, γ, c  per band.
+    """
+    def __init__(self,
+                 latent_dim: int   = 64,
+                 hidden: int       = 128,
+                 NUM_BANDS: int    = 6,
+                 BAND_EMB_DIM: int = 4):
+        super().__init__()
+        self.to_params = BandParametricDecoder(
+            latent      = latent_dim,
+            hidden      = hidden,
+            K           = 1,
+            NUM_BANDS   = NUM_BANDS,
+            BAND_EMB_DIM= BAND_EMB_DIM,
+            DF          = 7,
+        )
+        self.softplus = nn.Softplus()
+
+    def forward(self, z: torch.Tensor, t: torch.Tensor, band_idx: torch.Tensor) -> torch.Tensor:
+        """
+        z         (B, L)
+        t         (B, T, 1)  
+        band_idx  (B, T, 1)
+        returns   (B, T, 1)
+        """
+        # -------- predict parameters ------------------------------------------
+        p = self.to_params(z, t, band_idx)    # (B,T,1,7)
+        p = p.squeeze(2)                      # (B,T,7)
+
+        A_raw, beta, t0_raw, log_tr, log_tf, gamma_raw, c = p.unbind(-1)
+
+        # -------- re‑parameterise ---------------------------------------------
+        A     = self.softplus(A_raw) + 1e-3
+        t0    = t0_raw.tanh()
+        τ_r   = 0.01 + self.softplus(log_tr)
+        τ_f   = 0.01 + self.softplus(log_tf)
+        γ     = self.softplus(gamma_raw)
+        t1    = t0 + γ
+
+        # -------- piece‑wise flux ---------------------------------------------
+        t_flat   = t[:, :, 0]                 # explicit slice (B,T)
+        t_shift  = t_flat - t0
+        σ        = 1.0 + torch.exp(-t_shift / τ_r)
+
+        F_rise = (A + beta * t_shift) / σ + c
+        F_fall = (A + beta * γ) * torch.exp(-(t_flat - t1) / τ_f) / σ + c
+
+        mask   = (t_flat < t1).float()        # no ellipsis
+        flux   = mask * F_rise + (1.0 - mask) * F_fall
+        return flux.unsqueeze(-1)
