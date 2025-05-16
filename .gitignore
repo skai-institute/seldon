@@ -182,3 +182,5 @@ TAE/data/filtered_data_test.pkl
 TAE/data/filtered_data.pkl
 TAE/data/*.pkl
 *.ckpt
+.DS_Store
+TAE/.DS_Store

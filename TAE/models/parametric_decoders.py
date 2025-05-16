@@ -9,7 +9,7 @@ class BandParametricDecoder(nn.Module):
         self.K        = K
         self.NUM_BANDS = NUM_BANDS
         self.BAND_EMB_DIM = BAND_EMB_DIM
-        self.DF = DF
+        self.DF = DF # the number of parameters each sigmoidal basis function has
         self.band_emb = nn.Embedding(self.NUM_BANDS, self.BAND_EMB_DIM)
 
         inp = latent + BAND_EMB_DIM                       # concat z‖e_b
@@ -63,27 +63,38 @@ class BazinDecoder(nn.Module):
     
 
 class SigmoidBasisDecoder(nn.Module):
-    def __init__(self, latent_dim: int = 128, num_basis: int = 8):
+    def __init__(self,latent_dim = 128,hidden = 128,num_basis = 8,NUM_BANDS = 6,BAND_EMB_DIM = 4):
         super().__init__()
         self.num_basis = num_basis
-        self.to_params = nn.Linear(latent_dim, 3 * num_basis)
+        # DF = 3 → (w_raw, μ_raw, log σ)
+        self.to_params = BandParametricDecoder(latent = latent_dim,hidden = hidden,K = num_basis,NUM_BANDS = NUM_BANDS,BAND_EMB_DIM = BAND_EMB_DIM,DF = 3)
         self.softplus = nn.Softplus()
 
-    def forward(self, z: torch.Tensor, t: torch.Tensor):  # z: (B,L), t: (B,T,1)
-        B, T = t.shape[:2]
-        params = self.to_params(z)  # (B, 3K)
-        w, mu_raw, log_sigma = torch.chunk(params, 3, dim=-1)  # each (B,K)
+    def forward(self,
+                z: torch.Tensor,      # (B, latent_dim)
+                t: torch.Tensor,      # (B, T, 1)
+                band_idx: torch.Tensor  # (B, T, 1)
+               ) -> torch.Tensor:     # → (B, T, 1)
 
-        t_max = t.max(dim=1, keepdim=True).values  # (B,1,1)
-        mu = torch.sigmoid(mu_raw) * t_max.squeeze(-1)  # (B,K)
-        sigma = self.softplus(log_sigma) + 1e-4   # (B,K)
+        # (B, T, K, 3)  → last dim = (w_raw, μ_raw, log σ)
+        params = self.to_params(z, t, band_idx)
+        w_raw, mu_raw, log_sigma = params.unbind(-1)          # each (B, T, K)
 
-        w     = w.unsqueeze(1)         # (B,1,K)
-        mu    = mu.unsqueeze(1)        # (B,1,K)
-        sigma = sigma.unsqueeze(1)     # (B,1,K)
-        t     = t.expand(-1, -1, self.num_basis)  # (B,T,K)
+        # Centre positions lie in [0, t_max] per light curve
+        t_max = t.max(dim=1, keepdim=True).values             # (B,1,1)
+        mu    = torch.sigmoid(mu_raw) * t_max                 # (B, T, K)
+        sigma = self.softplus(log_sigma) + 1e-4               # positive, (B, T, K)
 
-        self.last_basis = torch.sigmoid((t - mu) / sigma)  # (B,T,K)
-        self.last_weight = w
-        out = torch.sum(w * self.last_basis, dim=-1, keepdim=True)  # (B,T,1)
+        # Broadcast time to K bases
+        t_expanded = t.expand(-1, -1, self.num_basis)         # (B, T, K)
+
+        basis   = torch.sigmoid((t_expanded - mu) / sigma)    # (B, T, K)
+        weights = w_raw                                        # (B, T, K)
+
+        # Save for optional inspection/debugging
+        self.last_basis  = basis.detach()
+        self.last_weight = weights.detach()
+
+        # Weighted sum of bases → (B, T, 1)
+        out = torch.sum(weights * basis, dim=-1, keepdim=True)
         return out
