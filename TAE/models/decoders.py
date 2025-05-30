@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
+from TAE.util import register_module
 
 
 class BaseDecoder(nn.Module):
@@ -19,7 +20,7 @@ class BaseDecoder(nn.Module):
     ) -> torch.Tensor:
         return inputs
 
-
+@register_module
 class MLPDecoder(BaseDecoder):
     """Multi-layer perceptron decoder."""
 
@@ -235,14 +236,14 @@ NUM_BANDS = 6  # keep the same constants you use elsewhere
 BAND_EMB_DIM = 6
 SIG_BASIS_K = 8  # number of sigmoid bases
 
-
+@register_module
 class MLPBandDecoder(nn.Module):
-    def __init__(self, latent: int, hidden: int = 128, K: int = SIG_BASIS_K):
+    def __init__(self, latent_dim: int, hidden: int = 128, K: int = SIG_BASIS_K):
         super().__init__()
         self.K = K
         self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM)
 
-        inp = latent + BAND_EMB_DIM  # concat z‖e_b
+        inp = latent_dim + BAND_EMB_DIM  # concat z‖e_b
         self.mlp = nn.Sequential(
             nn.Linear(inp, hidden),
             nn.GELU(),

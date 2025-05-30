@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch import nn
-
+from TAE.util import register_module
 
 class BandParametricDecoder(nn.Module):
     def __init__(
@@ -51,7 +51,7 @@ class BandParametricDecoder(nn.Module):
 
         return params  # (B, S, K, DF)
 
-
+@register_module
 class BazinDecoder(nn.Module):
     def __init__(self, latent_dim=64, hidden=128, NUM_BANDS=6, BAND_EMB_DIM=4):
         super().__init__()
@@ -80,7 +80,7 @@ class BazinDecoder(nn.Module):
         f = A.unsqueeze(-1) * num / denom
         return f
 
-
+@register_module
 class SigmoidBasisDecoder(nn.Module):
     def __init__(
         self, latent_dim=128, hidden=128, num_basis=8, NUM_BANDS=6, BAND_EMB_DIM=4
@@ -128,7 +128,7 @@ class SigmoidBasisDecoder(nn.Module):
         out = torch.sum(weights * basis, dim=-1, keepdim=True)
         return out
 
-
+@register_module
 class PiecewiseBandDecoder(nn.Module):
     """
     Band aware piece‑wise light-curve model (Villar+19 Eq. 1).

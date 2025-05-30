@@ -10,6 +10,7 @@ from TAE.models.scheduler import (
 )
 from TAE.models.vae_label import VAELabel
 from TAE.models.autoencoders import Autoencoder, BandAwareAutoencoder
+from TAE.util import registry
 
 # from TAE.experiments.autoencoder_experiment import Experiment, AutoencoderExperiment
 
@@ -37,6 +38,7 @@ MODULES = {
     # "Experiment": Experiment,
     # "AutoencoderExperiment": AutoencoderExperiment,
 }
+MODULES.update(registry)
 
 
 def get_module(name: str, config) -> object:

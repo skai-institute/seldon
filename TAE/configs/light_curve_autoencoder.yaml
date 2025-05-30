@@ -3,13 +3,15 @@ dataset:
   config:
     lightcurve_path: TAE/data/cleaned_data_merged.pkl  
     class_filter: 
-      - 'SNIa'                        
-    normalization: max_partial_scalar
+      - 'SNIa'     
+      - 'SNII'                   
+    flux_normalization: max_partial_scalar
+    time_normalization: minmax
     min_points: 3
-    augmentation: full
+    augmentation: mixed
     num_aug_per_curve: 2
     batch_size: 64
-    num_workers: 4
+    num_workers: 1
 
    
 
@@ -23,7 +25,11 @@ model_params:
     kl_weight: 0.0
     #num_bands: 6
     #band_embedding_dim: 4
-    decoder: "Bazin"
+    decoder: 
+      name: "MLPBandDecoder"
+      config:
+        latent_dim: 8
+
 
 exp_params:
   name: GRUVAEExperiment
@@ -40,7 +46,7 @@ exp_params:
 
 trainer_params:
   max_epochs: 200
-  accelerator: "gpu"
+  accelerator: "auto"
   devices: 1
 
 logging_params:

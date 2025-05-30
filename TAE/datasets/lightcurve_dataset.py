@@ -13,243 +13,179 @@ from enum import Enum
 from TAE.util import fill_config, extract_curves_from_filtered_data
 
 
-TIME = 0
-FLUX = 1
-FLUXERR = 2
-
-
-"""
-SNLightCurveDataset module: LightningDataModule wrapper for supernova light curve dataset
-Supports optional truncation, z-score or max-so-far normalization, and multiband modeling.
-"""
-
-"""
-augmented_lightning_dataset.py
-
-LightningDataModule that wraps a custom Dataset for supernova light curves.
-Supports band-aware augmentation, normalization, and partial sampling.
-"""
-
-# ======================================
-# Supernova Light Curve Dataset (Simple Version)
-# ======================================
-
 
 # Mapping of band names to integer codes
 BAND_IDX_MAP = {"g": 0, "r": 1, "i": 2, "z": 3, "y": 4, "u": 5}
 
+class LightCurvePreprocessor(Dataset):
 
-class SNLightCurveDataset(Dataset):
     """
-    Dataset for supernova light curves (single-band).
-    Provides [time, normalized flux, scalar] inputs and band code.
+    Light curve preprocessor that applies augmentation and normalization to light curves.
     """
 
     def __init__(
-        self,
+        self, 
         full_light_curves,
-        normalization="max_partial_scalar",
-        min_points=5,
-        augmentation="mixed",
-        num_aug_per_curve=3,
+        flux_normalization="max_partial_scalar", 
+        log_flux=True, 
+        time_normalization="minmax", 
+        augmentation="mixed", 
+        min_points=5, 
         min_obs_fraction=0.5,
+        num_aug_per_curve=3,
     ):
         self.full_light_curves = full_light_curves
-        self.normalization = normalization
-        self.min_points = min_points
+        self.flux_normalization = flux_normalization
+        self.log_flux = log_flux
+        self.time_normalization = time_normalization
         self.augmentation = augmentation
-        self.num_aug_per_curve = num_aug_per_curve
+        self.min_points = min_points
         self.min_obs_fraction = min_obs_fraction
 
-        # Build (index, mode) list
+        # Build (light curve index, augmentation mode) list
         self.index_pairs = []
-        for i, full_lc in enumerate(full_light_curves):
+        for i, full_lc in enumerate(self.full_light_curves):
             if len(full_lc) < min_points:
                 continue
             self.index_pairs.append((i, "full"))
             for _ in range(num_aug_per_curve):
-                self.index_pairs.append((i, "aug"))
+                if self.augmentation == "mixed":
+                    mode = np.random.choice(["cutoff", "cuton", "sparse"])
+                else:
+                    mode = self.augmentation
+                self.index_pairs.append((i, mode))
+
         columns = ["days_since_first_observation", "FLUXCAL", "FLUXCALERR"]
-        self.full_light_curve_arrays = [
+
+        self.full_light_curve_array = [
             df[columns].astype(np.float32).reset_index(drop=True).values
             for df in tqdm(self.full_light_curves)
         ]
+
         self.band_array = [
             df["band" if "band" in df.columns else "filter"]
             .reset_index(drop=True)
             .values
-            for df in tqdm(self.full_light_curves)
+            for df in self.full_light_curves
         ]
+
         print(
             f"Dataset contains {len(self.index_pairs)} samples from {len(full_light_curves)} full curves."
         )
 
-    def set_min_obs_fraction(self, frac: float):
-        """Optional curriculum helper to adjust minimum observed fraction."""
-        self.min_obs_fraction = frac
+    def apply_augmentation(self, lc, lc_band, mode):
 
+        n = len(lc) 
+
+        min_len = max(self.min_points, int(self.min_obs_fraction * n))
+        if mode == "full" or (n <= min_len):
+            return lc, lc_band, np.arange(n)
+        if mode == "cutoff":
+            aug_idx = np.random.randint(min_len, n)
+            return lc[:aug_idx], lc_band[:aug_idx], np.arange(aug_idx)
+        if mode == "cuton":
+            hi = n - min_len
+            aug_idx = np.random.randint(hi, n)
+            return lc[aug_idx:], lc_band[aug_idx:], np.arange(aug_idx, n)
+        if mode == "sparse":
+            k = np.random.randint(min_len, n)
+            aug_idx = np.sort(np.random.choice(n, k, replace=False))
+            return lc[aug_idx], lc_band[aug_idx], aug_idx
+        else:
+            raise NameError(f'mode must be one of ("cutoff", "cuton", "sparse", "full") but got {mode}')
+        
+        
+
+    def normalize_flux(self, flux, fluxerr, flux_norm_info=None):
+
+        if self.log_flux:
+            flux = np.sign(flux) * np.log10(np.abs(flux) + 1.0)
+            fluxerr = np.sign(flux) * fluxerr / (np.abs(flux) + 1.0) / np.log(10)
+
+        if self.flux_normalization == "max_partial_scalar":
+            if flux_norm_info is None: 
+                scalar = flux.max() + 1e-6
+            else:
+                scalar = flux_norm_info[3]
+            flux = flux / scalar
+            fluxerr = fluxerr / scalar
+            fluxnorm_info = ("log_flux", self.log_flux, "max_partial_scalar", float(scalar))
+
+        if self.flux_normalization == "zscore":
+            if flux_norm_info is None: 
+                mu = flux.mean()
+                sd = flux.std() or 1.0
+            else:
+                mu, sd = flux_norm_info[3], flux_norm_info[4]
+            flux = (flux - mu) / sd
+            fluxerr = fluxerr / sd
+            fluxnorm_info = ("log_flux", self.log_flux, "zscore", float(mu), float(sd))
+
+        return flux, fluxerr, fluxnorm_info
+
+    def normalize_time(self, time, time_norm_info=None):
+        if self.time_normalization == "minmax":
+            if time_norm_info is None:
+                t_min = time.min()
+                t_max = 500
+            else:
+                t_min, t_max = time_norm_info[1], time_norm_info[2]
+            time = (time - t_min) / t_max
+            return time, ("minmax", float(t_min), float(t_max))
+        else:
+            return time, ("none")
+        
     def __len__(self):
+
         return len(self.index_pairs)
 
-    def get_aumentation_index(self, df):
-        n = len(df)
-        min_len = max(self.min_points, int(self.min_obs_fraction * n))
-        if self.augmentation == "mixed":
-            mode = np.random.choice(["cutoff", "cuton", "sparse"])
-        else:
-            mode = self.augmentation
-
-        if mode == "cutoff":
-            return np.arange(np.random.randint(min_len, n))
-        if mode == "cuton":
-            hi = n - min_len
-            return np.arange(np.random.randint(hi, n), n) if hi > 0 else np.arange(hi)
-        if mode == "sparse":
-            k = np.random.randint(min_len, n)
-            return np.sort(np.random.choice(n, k, replace=False))
-
-    def _apply_augmentation_mode(self, df, mode):
-        """Cutoff, cuton, sparse, or return full."""
-        n = len(df)
-        min_len = max(self.min_points, int(self.min_obs_fraction * n))
-
-        if mode == "cutoff":
-            return df[: np.random.randint(min_len, n)]
-        if mode == "cuton":
-            hi = n - min_len
-            return df[np.random.randint(0, hi) :] if hi > 0 else df
-        if mode == "sparse":
-            k = np.random.randint(min_len, n)
-            return df[np.sort(np.random.choice(n, k, replace=False))]
-        return df
-
-    def _augment(self, df):
-        if self.augmentation == "mixed":
-            mode = np.random.choice(["cutoff", "cuton", "sparse"])
-            return self._apply_augmentation_mode(df, mode)
-        elif self.augmentation is not None:
-            return self._apply_augmentation_mode(df, self.augmentation)
-        else:
-            return df
-
-    def apply_flux_normalization(
-        self, part_flux, part_fluxerr, full_flux, full_fluxerr
-    ):
-        """can unify these as a (ref, *other) style"""
-
-        if self.normalization == "max_partial_scalar":
-            scalar = part_flux.max() + 1e-6
-            for arr in (part_flux, part_fluxerr, full_flux, full_fluxerr):
-                arr /= scalar
-            flux_norm = ("max_partial_scalar", float(scalar))
-        else:  # "zscore"
-            mu, sd = part_flux.mean(), part_flux.std() or 1.0
-            scalar = sd
-            for arr in (part_flux, full_flux):
-                arr -= mu
-                arr /= sd
-            for arr in (part_fluxerr, full_fluxerr):
-                arr /= sd
-            flux_norm = ("zscore", float(mu), float(sd))
-
-        return flux_norm
-
-    def apply_time_normalization(self, part_time, full_time):
-
-        t_min = part_time.min()
-        t_rng = 100
-        for arr in (part_time, full_time):
-            arr -= t_min
-            arr /= t_rng
-        return ("minmax", float(t_min), float(t_rng))
-
     def __getitem__(self, idx):
-        curve_i, mode = self.index_pairs[idx]
-        full_df = self.full_light_curve_arrays[curve_i].copy()
-        if self.augmentation == "full":
-            mode = "full"
-        if mode == "full":
-            part_df = full_df.copy()
-            aug_idx = np.arange(len(full_df))
-        else:
-            aug_idx = self.get_aumentation_index(full_df)
-            part_df = full_df.copy()[aug_idx]
-        # part_df = full_df.copy() if mode == "full" else self._augment(full_df).copy()
+        
+        '''
+        Get the light curve and preform preprocessing 
+        (augmentation, flux/time normalization) on the light curve.
+        For augmented light curves, return the full light curve as well.
+        '''
+        # get the original light curve and augmentation mode
+        lc_idx, mode = self.index_pairs[idx]
+        lc_full = self.full_light_curve_array[lc_idx].copy()  ## TIME, FLUX, FLUXERR
+        band_full = self.band_array[lc_idx].copy()
+        band_idx_full = np.array([BAND_IDX_MAP[str(b)] for b in self.band_array[lc_idx].copy()])
 
-        band_code = BAND_IDX_MAP[str(self.band_array[curve_i][0])]
-        band_codes = np.array([BAND_IDX_MAP[str(b)] for b in self.band_array[curve_i]])
-        band_t = torch.tensor(band_codes, dtype=torch.long)
+        # Apply augmentation        
+        lc_part, band_part, aug_idx  = self.apply_augmentation(lc_full, band_full, mode)
+        band_idx_part = np.array([BAND_IDX_MAP[str(b)] for b in band_part])
 
-        # Raw arrays
-        # full_df = full_df[["days_since_first_observation", "FLUXCAL", "FLUXCALERR"]].astype(np.float32)
-        # part_df = part_df[["days_since_first_observation", "FLUXCAL", "FLUXCALERR"]].astype(np.float32)
+        # Normalize time
+        time_part, time_norm_info  = self.normalize_time(lc_part[:, 0])
+        time_full, _ = self.normalize_time(lc_full[:, 0], time_norm_info=time_norm_info)
 
-        # Time normalization
-        t_min = full_df[:, TIME].min()
-        t_rng = 500
-        full_df[:, TIME] = (full_df[:, TIME] - t_min) / t_rng
-        part_df[:, TIME] = (part_df[:, TIME] - t_min) / t_rng
-
-        # Flux normalization
-        if self.normalization == "max_partial_scalar":
-            scalar = np.max(part_df[:, FLUX]) + 1e-6
-            full_df[:, [FLUX, FLUXERR]] = full_df[:, [FLUX, FLUXERR]] / scalar
-            part_df[:, [FLUX, FLUXERR]] = part_df[:, [FLUX, FLUXERR]] / scalar
-            flux_norm = ("max_partial_scalar", float(scalar))
-        else:  # "zscore"
-            mu, sd = part_df[:, FLUX].mean(), part_df[:, FLUX].std() or 1.0
-            scalar = sd
-            full_df[:, [FLUX, FLUXERR]] = (full_df[:, [FLUX, FLUXERR]] - mu) / sd
-            part_df[:, [FLUX, FLUXERR]] = (part_df[:, [FLUX, FLUXERR]] - mu) / sd
-            flux_norm = ("zscore", float(mu), float(sd))
-
-        # Convert to torch tensors
-        t_full_t = torch.from_numpy(full_df[:, TIME]).unsqueeze(1)
-        f_full_t = torch.from_numpy(full_df[:, FLUX]).unsqueeze(1)
-        ferr_full = torch.from_numpy(full_df[:, FLUXERR]).unsqueeze(1)
-
-        t_part_t = torch.from_numpy(part_df[:, TIME]).unsqueeze(1)
-        f_part_t = torch.from_numpy(part_df[:, FLUX]).unsqueeze(1)
-        ferr_part = torch.from_numpy(part_df[:, FLUXERR]).unsqueeze(1)
-
-        scalar_t_part = torch.full_like(t_part_t, scalar)
-        scalar_t_full = torch.full_like(t_full_t, scalar)
-
-        # band_idx_full = band_t.expand(len(t_full_t), 1)
-        # band_idx_part = band_t.expand(len(t_part_t), 1)
-
-        band_idx_full = band_t.unsqueeze(1)
-        band_idx_part = band_t[aug_idx].unsqueeze(1)
+        # Normalize flux
+        flux_part, flux_err_part, flux_norm_info =  self.normalize_flux(lc_part[:,1],lc_part[:,2])
+        flux_full, flux_err_full, _ =  self.normalize_flux(lc_full[:,1],lc_full[:,2], flux_norm_info=flux_norm_info)
 
         # Mask for in-sample points
-        mask = torch.zeros(len(t_full_t), dtype=torch.bool)
-        for tv in t_part_t.squeeze():
-            mask |= torch.abs(t_full_t.squeeze() - tv) < 1e-4
-
-        # x_input = [time, normalized flux, scalar]
-        x_input = torch.cat([t_part_t, f_part_t, scalar_t_part], dim=1)
+        mask = np.zeros(len(time_full), dtype=bool)
+        mask[aug_idx] = True
+        scalar_t_part = np.full_like(time_part, flux_norm_info[-1])
+        x_input = np.vstack([time_part, flux_part, scalar_t_part]).T
 
         return {
-            "x_input": x_input,  # (T_part, 3)
-            "band_idx": band_idx_part,  # (T_part, 1)
-            "time_partial": t_part_t,
-            "flux_partial": f_part_t,
-            "flux_err_partial": ferr_part,
-            "time_full": t_full_t,
-            "flux_full": f_full_t,
-            "flux_err_full": ferr_full,
-            "scalar_full": scalar_t_full,
-            "band_idx_full": band_idx_full,  # (T_full, 1)
-            "in_sample_mask": mask,
-            "full_lengths": torch.tensor(len(full_df[:, TIME]), dtype=torch.long),
-            "peak_time": torch.tensor(
-                float(full_df[:, TIME][full_df[:, FLUX].argmax()])
-            ),
-            "peak_flux": torch.tensor(float(full_df[:, FLUX].max())),
-            "norm_info": {
-                "flux": flux_norm,
-                "time": ("minmax", float(t_min), float(t_rng)),
-            },
+            "x_input": torch.from_numpy(x_input),
+            "time_part": torch.from_numpy(time_part).unsqueeze(1),
+            "flux_part": torch.from_numpy(flux_part).unsqueeze(1),
+            "flux_err_part": torch.from_numpy(flux_err_part).unsqueeze(1),
+            "band_idx_part": torch.from_numpy(band_idx_part).unsqueeze(1),
+            "time_full": torch.from_numpy(time_full).unsqueeze(1),
+            "flux_full": torch.from_numpy(flux_full).unsqueeze(1),
+            "flux_err_full": torch.from_numpy(flux_err_full).unsqueeze(1),
+            "band_idx_full": torch.from_numpy(band_idx_full).unsqueeze(1),
+            "in_sample_mask": torch.from_numpy(mask).unsqueeze(1),
+            "peak_time": torch.tensor(float(time_full.max())),
+            "peak_flux": torch.tensor(float(flux_full.max())),
+            "time_norm_info": time_norm_info,
+            "flux_norm_info": flux_norm_info,
+            "augmentation": mode,  
         }
 
 
@@ -274,7 +210,7 @@ def enhanced_collate_fn(batch):
 
     coll = {
         "x_input": pad([b["x_input"] for b in batch], (B, max_part, 3)),
-        "band_idx": pad([b["band_idx"] for b in batch], (B, max_part, 1), torch.long),
+        "band_idx": pad([b["band_idx_part"] for b in batch], (B, max_part, 1), torch.long),
         "time_full": pad([b["time_full"] for b in batch], (B, max_full, 1)),
         "flux_full": pad([b["flux_full"] for b in batch], (B, max_full, 1)),
         "flux_err_full": pad([b["flux_err_full"] for b in batch], (B, max_full, 1)),
@@ -282,7 +218,7 @@ def enhanced_collate_fn(batch):
             [b["band_idx_full"] for b in batch], (B, max_full, 1), torch.long
         ),
         "in_sample_mask": pad(
-            [b["in_sample_mask"].unsqueeze(1) for b in batch],
+            [b["in_sample_mask"] for b in batch],
             (B, max_full, 1),
             torch.bool,
         ).squeeze(2),
@@ -290,7 +226,8 @@ def enhanced_collate_fn(batch):
         "full_lengths": torch.tensor([len(b["time_full"]) for b in batch]),
         "peak_time": torch.tensor([b["peak_time"] for b in batch]),
         "peak_flux": torch.tensor([b["peak_flux"] for b in batch]),
-        "norm_info": [b["norm_info"] for b in batch],
+        "flux_norm_info": [b["flux_norm_info"] for b in batch],
+        "time_norm_info": [b["time_norm_info"] for b in batch]
     }
     return coll
 
@@ -311,7 +248,9 @@ class SNDataModule(pl.LightningDataModule):
         lightcurve_path=".",
         batch_size=32,
         num_workers=4,
-        normalization="max_partial_scalar",
+        flux_normalization="max_partial_scalar",
+        time_normalization="minmax",
+        log_flux=True,
         min_points=5,
         augmentation="mixed",
         num_aug_per_curve=3,
@@ -323,7 +262,9 @@ class SNDataModule(pl.LightningDataModule):
         self.lightcurve_path = lightcurve_path
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.normalization = normalization
+        self.flux_normalization = flux_normalization
+        self.time_normalization = time_normalization
+        self.log_flux = log_flux
         self.min_points = min_points
         self.augmentation = augmentation
         self.num_aug_per_curve = num_aug_per_curve
@@ -339,10 +280,11 @@ class SNDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         if self.dataset is None:
-            self.dataset = SNLightCurveDataset(
+            self.dataset = LightCurvePreprocessor(
                 self.full_light_curves,
-                normalization=self.normalization,
-                min_points=self.min_points,
+                flux_normalization=self.flux_normalization, 
+                log_flux=self.log_flux, 
+                time_normalization=self.time_normalization, 
                 augmentation=self.augmentation,
                 num_aug_per_curve=self.num_aug_per_curve,
                 min_obs_fraction=self.min_obs_fraction,

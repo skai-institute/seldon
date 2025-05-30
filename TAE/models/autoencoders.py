@@ -79,6 +79,7 @@ class BandAwareAutoencoder(nn.Module):
         decoder="MLP",
         **kwargs
     ):
+        
         """
         Args:
             input_dim: number of input features (e.g., time + flux + dummy 1)
@@ -89,12 +90,14 @@ class BandAwareAutoencoder(nn.Module):
         self.encoder = GRUEncoder(input_dim, hidden_dim, latent_dim)
         # self.decoder = MLPBandDecoder(latent_dim, )  # hidden_dim inside decoder is default (128)
 
-        if decoder == "MLP":
-            self.decoder = MLPBandDecoder(latent_dim, **kwargs)
-        elif decoder == "Bazin":
-            self.decoder = BazinDecoder(latent_dim, **kwargs)
-        else:
-            raise NameError("Decoder must be MLP or Bazin.")
+        self.decoder = decoder
+
+        #if decoder == "MLP":
+        #    self.decoder = MLPBandDecoder(latent_dim, **kwargs)
+        #elif decoder == "Bazin":
+        #    self.decoder = BazinDecoder(latent_dim, **kwargs)
+        #else:
+        #    raise NameError("Decoder must be MLP or Bazin.")
 
         self.kl_weight = kl_weight
         self.out_sample_lambda = out_sample_lambda

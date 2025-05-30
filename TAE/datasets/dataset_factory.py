@@ -3,16 +3,18 @@ import typing
 from TAE.datasets.YSE_json_dataset import JSONDataLoader
 
 # from TAE.datasets.datasets import RandomData
-from TAE.datasets.lightcurve_dataset import SNLightCurveDataset, SNDataModule
+from TAE.datasets.lightcurve_dataset import SNDataModule
 from TAE.util import extract_curves_from_filtered_data
 import pickle
 from pathlib import Path
+from TAE.util import registry
 
 MODULES = {
     "YSEData": JSONDataLoader,
     "SNDataModule": SNDataModule,
-    "SNLightCurveDataset": SNLightCurveDataset,
 }
+
+MODULES.update(registry)
 
 # TODO: switch it back when the cluster updated to python 3.8
 # NAME_KEY: typing.Final[str] = "name"
