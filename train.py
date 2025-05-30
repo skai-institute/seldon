@@ -20,7 +20,7 @@ os.environ["HYDRA_FULL_ERROR"] = "1"
 logger = logging.getLogger(__name__)
 
 
-@hydra.main(config_path="TAE/configs", config_name="light_curve_autoencoder")
+@hydra.main(config_path="TAE/configs", config_name="light_curve_autoencoder", version_base="1.1")
 def main(cfg: DictConfig) -> None:
     cfg = fill_config(cfg)
     print(OmegaConf.to_yaml(cfg))  # Optional: print config for verification

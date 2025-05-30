@@ -222,7 +222,7 @@ def enhanced_collate_fn(batch):
             (B, max_full, 1),
             torch.bool,
         ).squeeze(2),
-        "lengths": torch.tensor([len(b["x_input"]) for b in batch]),
+        "lengths": torch.tensor([len(b["time_full"]) for b in batch]),
         "full_lengths": torch.tensor([len(b["time_full"]) for b in batch]),
         "peak_time": torch.tensor([b["peak_time"] for b in batch]),
         "peak_flux": torch.tensor([b["peak_flux"] for b in batch]),

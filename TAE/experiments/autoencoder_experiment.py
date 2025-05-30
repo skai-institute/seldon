@@ -92,16 +92,17 @@ class GRUVAEExperiment(Experiment):
                 plt.errorbar(
                     time[mask],
                     flux[mask],
-                    yerr=flux_err[mask],
+                    yerr=(flux_err[mask]**2)**0.5,
                     marker="o",
                     label=f"band {j}",
                     ls="none",
                     color=colors[j],
                 )
+                
                 plt.plot(out_time, reconstruction, label="Prediction", color=colors[j])
             plt.legend()
             plt.xlabel("Scaled Time")
             plt.ylabel("Scaled Flux")
-            plt.xlim(-time.max() * 1.2, time.max() * 1.2)
+            plt.xlim(-abs(time).max() * 1.2, abs(time).max() * 1.2)
 
             self.logger.experiment.add_figure(name, fig, self.current_epoch)
