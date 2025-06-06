@@ -2,6 +2,7 @@ from inspect import signature
 from TAE.experiments.experiment import (
     Experiment,
 )
+from TAE.util import registry
 
 # from TAE.experiments.autoencoder_experiment import AutoencoderExperiment
 from TAE.experiments.autoencoder_experiment import GRUVAEExperiment
@@ -11,6 +12,7 @@ MODULES = {
     # "AutoencoderExperiment": AutoencoderExperiment,
     "GRUVAEExperiment": GRUVAEExperiment,
 }
+MODULES.update(registry)
 
 # MODULES.update(model_modules)
 

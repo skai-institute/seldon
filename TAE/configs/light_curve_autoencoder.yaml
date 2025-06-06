@@ -3,14 +3,13 @@ dataset:
   config:
     lightcurve_path: TAE/data/cleaned_data_merged.pkl  
     class_filter: 
-      - 'SNIa'     
-      - 'SNII'                   
+      - 'SNIa'                    
     flux_normalization: max_partial_scalar
     time_normalization: minmax
     min_points: 3
-    augmentation: mixed
+    augmentation: cutoff
     num_aug_per_curve: 2
-    batch_size: 64
+    batch_size: 256
     num_workers: 1
 
    
@@ -20,15 +19,16 @@ model_params:
   name: BandAwareAutoencoder
   config:
     input_dim: 3
-    hidden_dim: 64
+    hidden_dim: 256
     latent_dim: 8
-    kl_weight: 0.0
+    kl_weight: 0.001
     #num_bands: 6
     #band_embedding_dim: 4
     decoder: 
       name: "MLPBandDecoder"
       config:
         latent_dim: 8
+        hidden: 256
 
 
 exp_params:
@@ -40,8 +40,15 @@ exp_params:
       optimizer: 
         name: "Adam"
         config:
-          LR: 0.001
-          weight_decay: 0.0 #1e-5
+          LR: 0.002
+          weight_decay: 0.0001 #1e-5
+    metrics: 
+      name: Metrics
+      config:
+        metrics:
+          - fractional_errors
+          - z_scores
+          - nrmse
     # dataset will be filled by the fill_config function
 
 trainer_params:

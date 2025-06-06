@@ -1,7 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+import torch
+
+import math
 from tqdm import tqdm
+
 
 
 registry = {}
@@ -51,3 +55,14 @@ def extract_curves_from_filtered_data(filtered_data, min_points=20, class_filter
             light_curves.extend(band_dict)
 
     return light_curves
+
+
+
+def linear_to_log(f_lin):
+    return torch.sign(f_lin) * torch.log10(f_lin.abs() + 1.0)
+
+def log_to_linear(f_log):
+    return torch.sign(f_log) * (10.0 ** f_log.abs() - 1.0)
+
+def sigma_log_to_linear(s_log, f_log):
+    return s_log * (10.0 ** f_log.abs()) * math.log(10.0)

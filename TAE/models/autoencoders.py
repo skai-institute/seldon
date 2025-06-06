@@ -118,7 +118,7 @@ class BandAwareAutoencoder(nn.Module):
         z, z_mean, z_logvar = self.encoder(x, band_idx_part)
         reconstructed = self.decoder(z, t, band_idx_full)
 
-        return {"reconstructed": reconstructed, "z_mean": z_mean, "z_logvar": z_logvar}
+        return {"reconstructed": reconstructed, "z_mean": z_mean, "z_logvar": z_logvar, 'z_sample': z}
 
     def encode(self, x, band_idx):
         """
@@ -156,7 +156,7 @@ class BandAwareAutoencoder(nn.Module):
         #   self.smooth_weight * smooth_penalty
         # )
 
-        return {"loss": total_loss}
+        return {"loss": total_loss, 'squared_error': squared_error.sum(1)}
 
     def training_step(self, batch, batch_idx):
         out = self(

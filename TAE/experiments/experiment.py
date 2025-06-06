@@ -7,7 +7,7 @@ import torch
 from scipy.stats import gamma
 
 from TAE.models.factory import get_module
-
+from TAE.models.metrics_results import MetricsEvaluator, Metrics
 
 class Experiment(pl.LightningModule):
     def __init__(
@@ -15,6 +15,7 @@ class Experiment(pl.LightningModule):
         model: pl.LightningModule = None,
         params: typing.Dict[str, typing.Any] = None,
         data=None,
+        metrics=None
     ) -> None:
         super(Experiment, self).__init__()
 
@@ -23,6 +24,7 @@ class Experiment(pl.LightningModule):
         self.curr_device = None
         self.hold_graph = False
         self.data = data
+        self.metrics = metrics
         try:
             self.hold_graph = self.params["retain_first_backpass"]
         except KeyError:
