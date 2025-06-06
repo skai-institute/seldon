@@ -18,18 +18,23 @@ dataset:
 model_params:
   name: BandAwareAutoencoder
   config:
-    input_dim: 3
-    hidden_dim: 128
     latent_dim: 8
+    variational: False
     kl_weight: 0.001
     loss: "NLL"
     #num_bands: 6
     #band_embedding_dim: 4
+    encoder:
+      name: "DeepSetEncoder"
+      config:
+        input_dim: 3
+        hidden_dim: 64
     decoder: 
       name: "MLPBandDecoder"
       config:
         latent_dim: 8
-        hidden: 128
+        hidden: 64
+
 
 
 exp_params:

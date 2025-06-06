@@ -70,12 +70,12 @@ class BandAwareAutoencoder(nn.Module):
 
     def __init__(
         self,
-        input_dim=3,
-        hidden_dim=64,
         latent_dim=8,
         kl_weight=0.001,
         out_sample_lambda=0.8,
         smooth_weight=1.0,
+        variational=True,
+        encoder="GRUEncoder",
         decoder="MLP",
         loss='mse',
         **kwargs
@@ -88,10 +88,15 @@ class BandAwareAutoencoder(nn.Module):
             latent_dim: dimension of latent z vector
         """
         super().__init__()
-        self.encoder = GRUEncoder(input_dim, hidden_dim, latent_dim)
+        self.encoder = encoder
+        #self.encoder = GRUEncoder(input_dim, hidden_dim, latent_dim)
         # self.decoder = MLPBandDecoder(latent_dim, )  # hidden_dim inside decoder is default (128)
 
         self.decoder = decoder
+        self.variational = variational
+
+        self.fc_mean = nn.Linear(encoder.hidden_dim, latent_dim)
+        self.fc_logvar = nn.Linear(encoder.hidden_dim, latent_dim)
 
         #if decoder == "MLP":
         #    self.decoder = MLPBandDecoder(latent_dim, **kwargs)
@@ -118,7 +123,20 @@ class BandAwareAutoencoder(nn.Module):
         Returns:
             dict with 'reconstructed', 'z_mean', 'z_logvar'
         """
-        z, z_mean, z_logvar = self.encoder(x, band_idx_part)
+        #z, z_mean, z_logvar = self.encoder(x, band_idx_part)
+        memory = self.encoder(x, band_idx_part)
+        z_mean = self.fc_mean(memory)
+        z_logvar = torch.clamp(self.fc_logvar(memory), min=-10.0, max=2.0)
+
+        if self.variational:
+            if self.training:
+                std = torch.exp(0.5 * z_logvar)
+                eps = torch.randn_like(std)
+                z = z_mean + eps * std
+            else:
+                z = z_mean
+        else:
+            z = z_mean
         reconstructed = self.decoder(z, t, band_idx_full)
 
         return {"reconstructed": reconstructed, "z_mean": z_mean, "z_logvar": z_logvar, 'z_sample': z}
@@ -128,7 +146,8 @@ class BandAwareAutoencoder(nn.Module):
         Encode input sequence into latent z.
         """
         with torch.no_grad():
-            z, _, _ = self.encoder(x, band_idx)
+            z = self.encoder(x, band_idx)
+            z = self.fc_mean(z)
             return z
 
     def decode(self, z, t, band_idx):
@@ -162,7 +181,10 @@ class BandAwareAutoencoder(nn.Module):
             * ((~mask).sum() + 1e-6)
             / (mask.sum() + 1e-6)
         )
-        kl = -0.5 * torch.mean(1 + z_logvar - z_mean.pow(2) - z_logvar.exp())
+        if self.variational:
+            kl = -0.5 * torch.mean(1 + z_logvar - z_mean.pow(2) - z_logvar.exp())
+        else:
+            kl = 0
 
         total_loss = (
             in_loss + self.out_sample_lambda * out_loss + self.kl_weight * kl

@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
+from TAE.util import register_module
 
 
 class BaseEncoder(nn.Module):
@@ -215,14 +216,14 @@ class ConvEncoder(BaseEncoder):
 NUM_BANDS = 6  # keep the same constants you use elsewhere
 BAND_EMB_DIM = 6
 
-
+@register_module
 class GRUEncoder(nn.Module):
     """
     GRU-based encoder for single-band supernova light curves.
     Encodes [time, normalized flux] sequences into latent vector z.
     """
 
-    def __init__(self, input_dim, hidden_dim, latent_dim, num_layers=1):
+    def __init__(self, input_dim=3, hidden_dim=128, num_layers=1):
         """
         Args:
             input_dim: number of input features (e.g., time + normalized flux + dummy 1)
@@ -231,6 +232,7 @@ class GRUEncoder(nn.Module):
         """
         # NEEDS TO BE BAND AWARE!
         super().__init__()
+        self.hidden_dim = hidden_dim
 
         self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM)
         self.gru = nn.GRU(
@@ -241,8 +243,8 @@ class GRUEncoder(nn.Module):
             bidirectional=False,
         )
 
-        self.fc_mean = nn.Linear(hidden_dim, latent_dim)
-        self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
+        #self.fc_mean = nn.Linear(hidden_dim, latent_dim)
+        #self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
 
     def forward(self, x, band_idx):
         """
@@ -259,7 +261,8 @@ class GRUEncoder(nn.Module):
         _, h_n = self.gru(x)  # h_n: (1, B, hidden_dim)
         h_n = h_n.squeeze(0)  # (B, hidden_dim)
 
-        z_mean = self.fc_mean(h_n)
+        
+        return h_n
         z_logvar = torch.clamp(self.fc_logvar(h_n), min=-10.0, max=2.0)
 
         if self.training:

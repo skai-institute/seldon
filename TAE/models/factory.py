@@ -2,6 +2,7 @@ from TAE.models.decoders import Label_MLPDecoder, ConvDecoder, MLPBandDecoder
 
 
 from TAE.models.encoders import Label_MLPEncoder, MLPEncoder, ConvEncoder
+from TAE.models.deepset import DeepSetEncoder
 from TAE.models.optimizer import Adam, RAdam, Ranger
 from TAE.models.scheduler import (
     AnnealingLinearScheduler,
