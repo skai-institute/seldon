@@ -77,6 +77,7 @@ class BandAwareAutoencoder(nn.Module):
         out_sample_lambda=0.8,
         smooth_weight=1.0,
         decoder="MLP",
+        loss='mse',
         **kwargs
     ):
         
@@ -102,6 +103,8 @@ class BandAwareAutoencoder(nn.Module):
         self.kl_weight = kl_weight
         self.out_sample_lambda = out_sample_lambda
         self.smooth_weight = smooth_weight
+
+        self.loss_method = loss
 
     def forward(self, x, t, band_idx_part, band_idx_full):
         """
@@ -135,11 +138,22 @@ class BandAwareAutoencoder(nn.Module):
         with torch.no_grad():
             return self.decoder(z, t, band_idx)
 
-    def loss_function(self, recon, target, time, mask, z_mean, z_logvar):
+    #def loss_function(self, recon, target, time, mask, z_mean, z_logvar):
+    def loss_function(self, out, batch):
         """
         Compute total loss = in-sample MSE + (out-of-sample MSE) + KL divergence + smoothness penalty.
         """
+        recon=out["reconstructed"]
+        target=batch["flux_full"]
+        time=batch["time_full"]
+        mask=batch["in_sample_mask"]
+        z_mean=out["z_mean"]
+        z_logvar=out["z_logvar"]
+        sigma = batch["flux_err_full"]
+
         squared_error = (recon - target) ** 2
+        if self.loss_method == 'NLL':
+            squared_error /= sigma.square().clamp_min(1e-3)
         mask = mask.unsqueeze(-1)
 
         in_loss = (squared_error * mask).sum()
@@ -166,13 +180,6 @@ class BandAwareAutoencoder(nn.Module):
             band_idx_full=batch["band_idx_full"],
         )
 
-        loss = self.loss_function(
-            recon=out["reconstructed"],
-            target=batch["flux_full"],
-            time=batch["time_full"],
-            mask=batch["in_sample_mask"],
-            z_mean=out["z_mean"],
-            z_logvar=out["z_logvar"],
-        )
+        loss = self.loss_function(out, batch)
 
         return loss

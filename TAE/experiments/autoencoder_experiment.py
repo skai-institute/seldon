@@ -36,15 +36,9 @@ class GRUVAEExperiment(Experiment):
             band_idx_part=batch["band_idx"],
             band_idx_full=batch["band_idx_full"],
         )
-
-        loss = self.model.loss_function(
-            recon=out["reconstructed"],
-            target=batch["flux_full"],
-            time=batch["time_full"],
-            mask=batch["in_sample_mask"],
-            z_mean=out["z_mean"],
-            z_logvar=out["z_logvar"],
-        )
+        
+        loss = self.model.loss_function(out, batch)
+        self.log("val_loss", loss["loss"])
 
         return {"loss": loss["loss"], "out": out, "batch": batch, 'chi2': loss['squared_error']}
 
@@ -54,7 +48,7 @@ class GRUVAEExperiment(Experiment):
         out = result["out"]
         batch = result["batch"]
 
-        self.log("val_loss", loss_val)
+        #self.log("val_loss", loss_val)
 
         # Optional: log metrics like MeanFE or NRMSE
         #evaluator = MetricsEvaluator(self, batch)

@@ -9,7 +9,7 @@ dataset:
     min_points: 3
     augmentation: cutoff
     num_aug_per_curve: 2
-    batch_size: 256
+    batch_size: 64
     num_workers: 1
 
    
@@ -19,16 +19,17 @@ model_params:
   name: BandAwareAutoencoder
   config:
     input_dim: 3
-    hidden_dim: 256
+    hidden_dim: 128
     latent_dim: 8
     kl_weight: 0.001
+    loss: "NLL"
     #num_bands: 6
     #band_embedding_dim: 4
     decoder: 
       name: "MLPBandDecoder"
       config:
         latent_dim: 8
-        hidden: 256
+        hidden: 128
 
 
 exp_params:
@@ -55,6 +56,7 @@ trainer_params:
   max_epochs: 200
   accelerator: "auto"
   devices: 1
+  gradient_clip_val: 0.5
 
 logging_params:
   manual_seed: 42
