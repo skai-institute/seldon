@@ -110,14 +110,14 @@ class SigmoidBasisDecoder(nn.Module):
         w_raw, mu_raw, log_sigma = params.unbind(-1)  # each (B, T, K)
 
         # Centre positions lie in [0, t_max] per light curve
-        t_max = t.max(dim=1, keepdim=True).values  # (B,1,1)
-        mu = torch.sigmoid(mu_raw) * t_max  # (B, T, K)
+        #t_max = t.max(dim=1, keepdim=True).values  # (B,1,1)
+        mu = mu_raw #) * 2 - 1# * 2*t_max - t_max  # (B, T, K)
         sigma = self.softplus(log_sigma) + 1e-4  # positive, (B, T, K)
 
         # Broadcast time to K bases
         t_expanded = t.expand(-1, -1, self.num_basis)  # (B, T, K)
 
-        basis = torch.sigmoid((t_expanded - mu) / sigma)  # (B, T, K)
+        basis = torch.sigmoid((t_expanded - mu) * sigma)  # (B, T, K)
         weights = w_raw  # (B, T, K)
 
         # Save for optional inspection/debugging

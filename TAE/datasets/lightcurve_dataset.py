@@ -47,10 +47,10 @@ class LightCurvePreprocessor(Dataset):
         for i, full_lc in enumerate(self.full_light_curves):
             if len(full_lc) < min_points:
                 continue
-            self.index_pairs.append((i, "full"))
+            #self.index_pairs.append((i, "full"))
             for _ in range(num_aug_per_curve):
                 if self.augmentation == "mixed":
-                    mode = np.random.choice(["cutoff", "cuton", "sparse"])
+                    mode = np.random.choice(["cutoff", "cuton", "sparse", "full"])
                 else:
                     mode = self.augmentation
                 self.index_pairs.append((i, mode))
@@ -99,8 +99,8 @@ class LightCurvePreprocessor(Dataset):
     def normalize_flux(self, flux, fluxerr, flux_norm_info=None):
 
         if self.log_flux:
+            fluxerr = fluxerr / (np.abs(flux) + 1.0) / np.log(10)
             flux = np.sign(flux) * np.log10(np.abs(flux) + 1.0)
-            fluxerr = np.sign(flux) * fluxerr / (np.abs(flux) + 1.0) / np.log(10)
 
         if self.flux_normalization == "max_partial_scalar":
             if flux_norm_info is None: 
@@ -127,7 +127,7 @@ class LightCurvePreprocessor(Dataset):
         if self.time_normalization == "minmax":
             if time_norm_info is None:
                 t_min = time.min()
-                t_max = 500
+                t_max = 200
             else:
                 t_min, t_max = time_norm_info[1], time_norm_info[2]
             time = (time - t_min) / t_max
@@ -219,6 +219,16 @@ def enhanced_collate_fn(batch):
         ),
         "in_sample_mask": pad(
             [b["in_sample_mask"] for b in batch],
+            (B, max_full, 1),
+            torch.bool,
+        ).squeeze(2),
+        "in_sample_mask_part": pad(
+            [torch.ones_like(b["x_input"]) for b in batch],
+            (B, max_part, 3),
+            torch.bool,
+        )[:, :, :1].squeeze(2),
+        "pad_mask_full": pad(
+            [torch.ones_like(b["time_full"]) for b in batch],
             (B, max_full, 1),
             torch.bool,
         ).squeeze(2),

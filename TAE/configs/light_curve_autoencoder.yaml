@@ -3,14 +3,15 @@ dataset:
   config:
     lightcurve_path: TAE/data/cleaned_data_merged.pkl  
     class_filter: 
-      - 'SNIa'                    
+      - 'SNIa'
+      - 'SNII'                    
     flux_normalization: max_partial_scalar
     time_normalization: minmax
-    min_points: 3
-    augmentation: cutoff
-    num_aug_per_curve: 2
-    batch_size: 64
-    num_workers: 1
+    min_points: 8
+    augmentation: full
+    num_aug_per_curve: 1
+    batch_size: 128
+    num_workers: 2
 
    
 
@@ -18,7 +19,7 @@ dataset:
 model_params:
   name: BandAwareAutoencoder
   config:
-    latent_dim: 8
+    latent_dim: 64
     variational: False
     kl_weight: 0.001
     loss: "NLL"
@@ -28,12 +29,17 @@ model_params:
       name: "DeepSetEncoder"
       config:
         input_dim: 3
-        hidden_dim: 64
+        hidden_dim: 256
+        pooling: "mean"
+        activation: "ReLU"
+        dropout: 0.2
     decoder: 
-      name: "MLPBandDecoder"
+      name: "SigmoidBasisDecoder"
       config:
-        latent_dim: 8
-        hidden: 64
+        latent_dim: 64
+        hidden: 256
+        BAND_EMB_DIM: 4
+        num_basis: 8
 
 
 
@@ -46,22 +52,22 @@ exp_params:
       optimizer: 
         name: "Adam"
         config:
-          LR: 0.002
-          weight_decay: 0.0001 #1e-5
+          LR: 3e-4
+          weight_decay: 0.0 #1e-5 #1e-5 #1 #1 #1e-5
     metrics: 
       name: Metrics
       config:
         metrics:
           - fractional_errors
           - z_scores
-          - nrmse
+          #- nrmse
     # dataset will be filled by the fill_config function
 
 trainer_params:
-  max_epochs: 200
+  max_epochs: 2000
   accelerator: "auto"
   devices: 1
-  gradient_clip_val: 0.5
+  gradient_clip_val: 1.0
 
 logging_params:
   manual_seed: 42

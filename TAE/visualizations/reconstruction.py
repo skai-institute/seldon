@@ -1,9 +1,22 @@
 import torch
 import matplotlib.pyplot as plt
-from TAE.util import log_to_linear, sigma_log_to_linear
+import math
+
 import numpy as np
 
-BAND_COL = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33"]
+
+def linear_to_log(f_lin):
+    return np.sign(f_lin) * np.log10(np.absolute(f_lin) + 1.0)
+
+def log_to_linear(f_log):
+    return np.sign(f_log) * (10.0 ** np.absolute(f_log) - 1.0)
+
+def sigma_log_to_linear(s_log, f_lin):
+    #return s_log * (10.0 ** np.absolute(f_log)) * math.log(10.0)
+    return s_log * (np.absolute(f_lin) + 1.0) * np.log(10.0)
+
+#BAND_COL = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33"]
+BAND_COL = ["#4daf4a", "#e41a1c", "#ff7f00", "#333333", "#984ea3", "#377eb8"]
 IDX2NAME = {0:"g", 1:"r", 2:"i", 3:"z", 4:"y", 5:"u"}
 TIME_SCALE = 1.0
 BAND_IDX_MAP = {"g":0, "r":1, "i":2, "z":3, "y":4, "u":5}
@@ -17,9 +30,12 @@ def plot_full_multiband_dense_plot(model, batch, idx, device, dense_pts=300):
     flux_err = batch["flux_err_full"][idx].detach().cpu().numpy()[:length, 0]
     time = batch["time_full"][idx].detach().cpu().numpy()[:length, 0]
     band = batch["band_idx_full"][idx].detach().cpu().numpy()[:length, 0]
+    sample_mask = batch["in_sample_mask"][idx].detach().cpu().numpy()[:length]
     t_max = np.max(np.abs(time)) * 1.2
     t_min = -t_max
     t_dense = torch.linspace(t_min, t_max, dense_pts)
+    flux = log_to_linear(flux)
+    flux_err = sigma_log_to_linear(flux_err, flux)
     for j in range(6):
         bands = torch.ones(dense_pts, dtype=torch.long).unsqueeze(1).unsqueeze(0) * j
         out = model(
@@ -31,7 +47,8 @@ def plot_full_multiband_dense_plot(model, batch, idx, device, dense_pts=300):
             band_idx_part=batch["band_idx"],
             band_idx_full=bands.expand(len(batch["x_input"]), dense_pts, 1).to(
                 device
-            ),  # Needs to be bands for decoding per time!
+            ),
+            mask=batch["in_sample_mask_part"],  # Needs to be bands for decoding per time!
         )
 
         reconstruction = (
@@ -39,18 +56,32 @@ def plot_full_multiband_dense_plot(model, batch, idx, device, dense_pts=300):
         )
         mask = band == j
 
+        reconstruction = log_to_linear(reconstruction)
+        
+
         plt.errorbar(
-            time[mask],
-            flux[mask],
-            yerr=(flux_err[mask]**2)**0.5,
+            time[mask & sample_mask],
+            flux[mask & sample_mask],
+            yerr=(flux_err[mask & sample_mask]**2)**0.5,
             marker="o",
             label=f"band {IDX2NAME[j]}",
             ls="none",
             color=BAND_COL[j],
         )
+
+        plt.errorbar(
+            time[mask & ~sample_mask],
+            flux[mask & ~sample_mask],
+            yerr=(flux_err[mask & ~sample_mask]**2)**0.5,
+            marker="o",
+            ls="none",
+            color=BAND_COL[j],
+            mfc='none',
+            alpha=0.5
+        )
         
         plt.plot(t_dense, reconstruction, label="Prediction", color=BAND_COL[j])
-    plt.legend()
+    plt.legend(ncol=2)
     plt.xlabel("Scaled Time")
     plt.ylabel("Scaled Flux")
     plt.xlim(-abs(time).max() * 1.2, abs(time).max() * 1.2)

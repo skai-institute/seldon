@@ -72,7 +72,7 @@ class BandAwareAutoencoder(nn.Module):
         self,
         latent_dim=8,
         kl_weight=0.001,
-        out_sample_lambda=0.8,
+        out_sample_lambda=1.0,
         smooth_weight=1.0,
         variational=True,
         encoder="GRUEncoder",
@@ -111,7 +111,7 @@ class BandAwareAutoencoder(nn.Module):
 
         self.loss_method = loss
 
-    def forward(self, x, t, band_idx_part, band_idx_full):
+    def forward(self, x, t, band_idx_part, band_idx_full, mask=None):
         """
         Forward pass through encoder and decoder.
 
@@ -124,7 +124,7 @@ class BandAwareAutoencoder(nn.Module):
             dict with 'reconstructed', 'z_mean', 'z_logvar'
         """
         #z, z_mean, z_logvar = self.encoder(x, band_idx_part)
-        memory = self.encoder(x, band_idx_part)
+        memory = self.encoder(x, band_idx_part, mask)
         z_mean = self.fc_mean(memory)
         z_logvar = torch.clamp(self.fc_logvar(memory), min=-10.0, max=2.0)
 
@@ -141,12 +141,12 @@ class BandAwareAutoencoder(nn.Module):
 
         return {"reconstructed": reconstructed, "z_mean": z_mean, "z_logvar": z_logvar, 'z_sample': z}
 
-    def encode(self, x, band_idx):
+    def encode(self, x, band_idx, mask=None):
         """
         Encode input sequence into latent z.
         """
         with torch.no_grad():
-            z = self.encoder(x, band_idx)
+            z = self.encoder(x, band_idx, mask)
             z = self.fc_mean(z)
             return z
 
@@ -166,20 +166,19 @@ class BandAwareAutoencoder(nn.Module):
         target=batch["flux_full"]
         time=batch["time_full"]
         mask=batch["in_sample_mask"]
+        pad_mask=batch["pad_mask_full"].unsqueeze(-1)
         z_mean=out["z_mean"]
         z_logvar=out["z_logvar"]
         sigma = batch["flux_err_full"]
 
         squared_error = (recon - target) ** 2
         if self.loss_method == 'NLL':
-            squared_error /= sigma.square().clamp_min(1e-3)
+            squared_error /= sigma.square().clamp_min(1e-6)
         mask = mask.unsqueeze(-1)
 
-        in_loss = (squared_error * mask).sum()
-        out_loss = (
-            (squared_error * (~mask)).sum()
-            * ((~mask).sum() + 1e-6)
-            / (mask.sum() + 1e-6)
+        in_loss = 0.5*(squared_error * mask).sum()
+        out_loss = 0.5*(
+            (squared_error * (~mask) * pad_mask).sum()
         )
         if self.variational:
             kl = -0.5 * torch.mean(1 + z_logvar - z_mean.pow(2) - z_logvar.exp())
@@ -188,11 +187,11 @@ class BandAwareAutoencoder(nn.Module):
 
         total_loss = (
             in_loss + self.out_sample_lambda * out_loss + self.kl_weight * kl
-        )  # +
+        )/(pad_mask.sum())  # +
         #   self.smooth_weight * smooth_penalty
         # )
 
-        return {"loss": total_loss, 'squared_error': squared_error.sum(1)}
+        return {"loss": total_loss, 'squared_error': (squared_error * pad_mask).sum(1)/(pad_mask.sum(1)+1e-6)}
 
     def training_step(self, batch, batch_idx):
         out = self(
@@ -200,6 +199,7 @@ class BandAwareAutoencoder(nn.Module):
             t=batch["time_full"],
             band_idx_part=batch["band_idx"],
             band_idx_full=batch["band_idx_full"],
+            mask=batch["in_sample_mask_part"]
         )
 
         loss = self.loss_function(out, batch)

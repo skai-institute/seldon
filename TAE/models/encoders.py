@@ -246,7 +246,7 @@ class GRUEncoder(nn.Module):
         #self.fc_mean = nn.Linear(hidden_dim, latent_dim)
         #self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
 
-    def forward(self, x, band_idx):
+    def forward(self, x, band_idx, mask):
         """
         Args:
             x: (B, T, input_dim) input sequence

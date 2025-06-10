@@ -5,6 +5,7 @@ from TAE.experiments.experiment import Experiment
 from TAE.models.metrics_results import MetricsEvaluator, Metrics
 from TAE.visualizations.reconstruction import plot_reconstruction_from_batch
 from TAE.visualizations.latent_space import plot_latents
+import numpy as np
 
 
 class GRUVAEExperiment(Experiment):
@@ -17,11 +18,13 @@ class GRUVAEExperiment(Experiment):
         """
         Forward pass: reconstruct flux values over full time grid.
         """
+        #print(batch['in_sample_mask_part'].shape, batch['x_input'].shape)
         return self.model(
             x=batch["x_input"],
             t=batch["time_full"],
             band_idx_part=batch["band_idx"],
             band_idx_full=batch["band_idx_full"],
+            mask=batch["in_sample_mask_part"]
         )
 
     def training_step(self, batch, batch_idx):
@@ -30,15 +33,16 @@ class GRUVAEExperiment(Experiment):
         return results
 
     def validation_step(self, batch, batch_idx):
+        
         out = self.model(
             x=batch["x_input"],
             t=batch["time_full"],
             band_idx_part=batch["band_idx"],
             band_idx_full=batch["band_idx_full"],
+            mask=batch["in_sample_mask_part"]
         )
         
         loss = self.model.loss_function(out, batch)
-        self.log("val_loss", loss["loss"])
 
         return {"loss": loss["loss"], "out": out, "batch": batch, 'chi2': loss['squared_error']}
 
@@ -48,7 +52,7 @@ class GRUVAEExperiment(Experiment):
         out = result["out"]
         batch = result["batch"]
 
-        #self.log("val_loss", loss_val)
+        self.log("val_loss", torch.mean(torch.tensor([o['loss'] for o in outputs])))
 
         # Optional: log metrics like MeanFE or NRMSE
         #evaluator = MetricsEvaluator(self, batch)
@@ -62,17 +66,19 @@ class GRUVAEExperiment(Experiment):
         #self.log("val_NRMSE", metrics["NRMSE"].mean())
 
         # Select best and worst reconstructions by squared error
-        squared_error = (
-            ((batch["flux_full"] - out["reconstructed"]) ** 2)
-            .mean(dim=1)
-            .detach()
-            .cpu()
-            .numpy()
-        )
+        #squared_error = (
+        #    ((batch["flux_full"] - out["reconstructed"]) ** 2)
+        #    .mean(dim=1)
+        #    .detach()
+        #    .cpu()
+        #    .numpy()
+        #)
+        squared_error = result['chi2'].detach().cpu().numpy()[:, 0]
         best_idx = squared_error.argmin()
         worst_idx = squared_error.argmax()
+        mid_idx = np.argsort(squared_error)[len(squared_error)//2]
 
-        for idx, name in zip((best_idx, worst_idx), ("Best", "Worst")):
+        for idx, name in zip((best_idx, worst_idx, mid_idx), ("Best", "Worst", "Median")):
             fig = plot_reconstruction_from_batch(self.model, batch, idx_in_batch=idx, device=self.device)
             self.logger.experiment.add_figure(name, fig, self.current_epoch)
 

@@ -37,7 +37,6 @@ def plot_latents(output,
     out = output['out']
     z = out['z_mean'].detach().cpu().numpy()
     loss = output['chi2'].detach().cpu().numpy()
-    print(z.shape, loss.shape)
 
     if loss_scale == "linear":
         loss_np = loss

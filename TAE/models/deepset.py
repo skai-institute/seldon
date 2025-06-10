@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from TAE.util import register_module
 from typing import Union
+import torch.nn.functional as F
 
 NUM_BANDS = 6  # keep the same constants you use elsewhere
 BAND_EMB_DIM = 6
@@ -13,6 +14,8 @@ class DeepSetEncoder(nn.Module):
         input_dim: int = 3,
         hidden_dim: int = 128,
         pooling: str = "mean",
+        dropout: float = 0.2,
+        activation: str = "Softplus",
     ):
         super().__init__()
         if pooling not in {"mean", "sum", "max"}:
@@ -20,15 +23,17 @@ class DeepSetEncoder(nn.Module):
         
         self.hidden_dim = hidden_dim
         self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM)
+        self.dropout=dropout
+        self.activation = getattr(nn, activation)
 
         # phi network – shared across points
         self.phi = nn.Sequential(    
             nn.Linear(input_dim + BAND_EMB_DIM, hidden_dim),
-            nn.ReLU(),
+            self.activation(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
+            self.activation(),
+            nn.Dropout(dropout),
         )
 
         self.pooling = pooling  # commutative aggregation
@@ -36,7 +41,7 @@ class DeepSetEncoder(nn.Module):
         # rho network – maps set embedding to latent code
         self.rho = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
+            self.activation(),
             nn.Linear(hidden_dim, hidden_dim),
         )
 
@@ -49,12 +54,13 @@ class DeepSetEncoder(nn.Module):
         if self.pooling == "sum":
             return h.sum(dim=1)
 
-        if self.pooling == "max":
+        elif self.pooling == "max":
             return h.max(dim=1).values
 
         # mean (default) – optionally masked
-        if mask is None:
+        elif mask is None:
             return h.mean(dim=1)
+        
 
         masked = h * mask.unsqueeze(-1)
         total  = masked.sum(dim=1)
