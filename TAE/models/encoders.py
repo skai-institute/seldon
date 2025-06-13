@@ -241,6 +241,7 @@ class GRUEncoder(nn.Module):
             num_layers=num_layers,
             batch_first=True,
             bidirectional=False,
+            bias=False,
         )
 
         #self.fc_mean = nn.Linear(hidden_dim, latent_dim)

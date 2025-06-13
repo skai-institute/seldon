@@ -14,8 +14,10 @@ from TAE.models.factory import get_module
 from TAE.util import fill_config
 from TAE.datasets import dataset_factory
 import os
+import torch
 
 os.environ["HYDRA_FULL_ERROR"] = "1"
+torch.set_float32_matmul_precision('high')
 
 logger = logging.getLogger(__name__)
 

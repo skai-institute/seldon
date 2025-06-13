@@ -3,10 +3,18 @@ import numpy as np
 import torch
 from torch import nn
 from dataclasses import dataclass
+from .loss import *
 
 from .encoders import GRUEncoder
 from .decoders import MLPBandDecoder
 from .parametric_decoders import BazinDecoder
+
+
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        nn.init.xavier_normal_(m.weight)
+        if hasattr(m, "bias"):
+            m.bias.data.fill_(0.01)
 
 
 @dataclass
@@ -88,6 +96,15 @@ class BandAwareAutoencoder(nn.Module):
             latent_dim: dimension of latent z vector
         """
         super().__init__()
+
+        if loss == 'NLL':
+            self.recon_loss = MaskedGaussianNLL()
+        elif loss == 'mse':
+            self.recon_loss = MaskedMSELoss()
+        elif loss == "Huber":
+            self.recon_loss = MaskedHuberLoss()
+        else:
+            raise ValueError(f"argument `loss` must be one of ('NLL', 'mse', 'Huber') but got '{self.loss}'")
         self.encoder = encoder
         #self.encoder = GRUEncoder(input_dim, hidden_dim, latent_dim)
         # self.decoder = MLPBandDecoder(latent_dim, )  # hidden_dim inside decoder is default (128)
@@ -110,6 +127,8 @@ class BandAwareAutoencoder(nn.Module):
         self.smooth_weight = smooth_weight
 
         self.loss_method = loss
+
+        self.apply(init_weights)
 
     def forward(self, x, t, band_idx_part, band_idx_full, mask=None):
         """
@@ -171,27 +190,24 @@ class BandAwareAutoencoder(nn.Module):
         z_logvar=out["z_logvar"]
         sigma = batch["flux_err_full"]
 
-        squared_error = (recon - target) ** 2
-        if self.loss_method == 'NLL':
-            squared_error /= sigma.square().clamp_min(1e-6)
-        mask = mask.unsqueeze(-1)
+        reconstruction_loss = self.recon_loss(out, batch)
 
-        in_loss = 0.5*(squared_error * mask).sum()
-        out_loss = 0.5*(
-            (squared_error * (~mask) * pad_mask).sum()
-        )
+        #in_loss = 0.5*(squared_error * mask).sum()
+        #out_loss = 0.5*(
+        #    (squared_error * (~mask) * pad_mask).sum()
+        #)
         if self.variational:
             kl = -0.5 * torch.mean(1 + z_logvar - z_mean.pow(2) - z_logvar.exp())
         else:
             kl = 0
 
         total_loss = (
-            in_loss + self.out_sample_lambda * out_loss + self.kl_weight * kl
-        )/(pad_mask.sum())  # +
+            torch.mean(reconstruction_loss) + self.kl_weight * kl
+        )  # +
         #   self.smooth_weight * smooth_penalty
         # )
 
-        return {"loss": total_loss, 'squared_error': (squared_error * pad_mask).sum(1)/(pad_mask.sum(1)+1e-6)}
+        return {"loss": total_loss, 'squared_error': reconstruction_loss}
 
     def training_step(self, batch, batch_idx):
         out = self(

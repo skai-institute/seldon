@@ -28,6 +28,7 @@ def fill_config(config):
 def extract_curves_from_filtered_data(filtered_data, min_points=20, class_filter=None):
     """Extract light curves from the filtered data structure, with optional filtering by class."""
     light_curves = []
+    class_names = []
 
     for class_name, band_dict in tqdm(filtered_data.items()):
         if isinstance(class_filter, str):
@@ -51,10 +52,11 @@ def extract_curves_from_filtered_data(filtered_data, min_points=20, class_filter
                 "days_since_first_observation"
             )
             light_curves.append(light_curve)
+            class_names.append(class_name)
         else:
             light_curves.extend(band_dict)
 
-    return light_curves
+    return light_curves, class_names
 
 
 

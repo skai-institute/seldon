@@ -22,9 +22,13 @@ TIME_SCALE = 1.0
 BAND_IDX_MAP = {"g":0, "r":1, "i":2, "z":3, "y":4, "u":5}
 
 
-def plot_full_multiband_dense_plot(model, batch, idx, device, dense_pts=300):
+def plot_full_multiband_dense_plot(model, batch, idx, device, ax=None, dense_pts=300):
 
-    fig = plt.figure()
+    if ax is None:
+        fig = plt.figure()
+    else:
+        plt.sca(ax)
+        fig = plt.gcf()
     length = batch["lengths"][idx].detach().cpu().numpy()
     flux = batch["flux_full"][idx].detach().cpu().numpy()[:length, 0]
     flux_err = batch["flux_err_full"][idx].detach().cpu().numpy()[:length, 0]
@@ -89,7 +93,7 @@ def plot_full_multiband_dense_plot(model, batch, idx, device, dense_pts=300):
     return fig
 
 @torch.no_grad()
-def full_multiband_dense_plot(model, sample, *, dense_pts = 300, device = None):
+def full_multiband_dense_plot(model, sample, *, dense_pts = 300, device = None,):
     """
     Multiband dense reconstruction with error bars and observed points.
     Return the Matplotlib figure object.
@@ -137,7 +141,7 @@ def full_multiband_dense_plot(model, sample, *, dense_pts = 300, device = None):
 
 
 def plot_reconstruction_from_batch(model, batch, idx_in_batch, *,
-                                   dense_pts=300, device=None):
+                                   dense_pts=300, device=None, ax=None):
     """
     Entry point for plotting a reconstruction from a batch.
     Returns the matplotlib Figure.
@@ -151,4 +155,4 @@ def plot_reconstruction_from_batch(model, batch, idx_in_batch, *,
     }
 
     return plot_full_multiband_dense_plot(model, batch, idx_in_batch, device,
-                                     dense_pts=dense_pts)
+                                     dense_pts=dense_pts, ax=ax)

@@ -1,0 +1,73 @@
+dataset:
+  name: SNDataModule
+  config:
+    lightcurve_path: TAE/data/cleaned_data_merged.pkl  
+    class_filter: 
+      - 'SNIa'                
+    flux_normalization: max_partial_scalar
+    time_normalization: minmax
+    min_points: 8
+    augmentation: full
+    num_aug_per_curve: 1
+    batch_size: 128
+    num_workers: 1
+    test_run: False
+    t_max: "infer"
+
+   
+
+
+model_params:
+  name: BandAwareAutoencoder
+  config:
+    latent_dim: 64
+    variational: False
+    kl_weight: 0.001
+    loss: "NLL"
+    #num_bands: 6
+    #band_embedding_dim: 4
+    encoder:
+      name: "GRUEncoder"
+      config:
+        input_dim: 3
+        hidden_dim: 256
+    decoder: 
+      name: "SigmoidBasisDecoder"
+      config:
+        latent_dim: 64
+        hidden: 256
+        BAND_EMB_DIM: 0
+        num_basis: 8
+
+
+
+exp_params:
+  name: GRUVAEExperiment
+  config:
+    params:
+      dataset: SNDataModule
+      figures: []
+      optimizer: 
+        name: "Adam"
+        config:
+          LR: 3e-4
+          weight_decay: 1e-4 #1e-5 #1e-5 #1 #1 #1e-5
+    metrics: 
+      name: Metrics
+      config:
+        metrics:
+          - fractional_errors
+          - z_scores
+          #- nrmse
+    # dataset will be filled by the fill_config function
+
+trainer_params:
+  max_epochs: 2000
+  accelerator: "auto"
+  devices: 1
+  gradient_clip_val: 1.0
+
+logging_params:
+  manual_seed: 42
+  save_dir: "/scratch/jackob/logs/"
+  name: "BandAwareGRUVAE"

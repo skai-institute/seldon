@@ -15,7 +15,7 @@ class DeepSetEncoder(nn.Module):
         hidden_dim: int = 128,
         pooling: str = "mean",
         dropout: float = 0.2,
-        activation: str = "Softplus",
+        activation: str = "ReLU",
     ):
         super().__init__()
         if pooling not in {"mean", "sum", "max"}:
@@ -23,7 +23,7 @@ class DeepSetEncoder(nn.Module):
         
         self.hidden_dim = hidden_dim
         self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM)
-        self.dropout=dropout
+        self.dropout = dropout
         self.activation = getattr(nn, activation)
 
         # phi network – shared across points

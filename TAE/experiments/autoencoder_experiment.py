@@ -6,6 +6,7 @@ from TAE.models.metrics_results import MetricsEvaluator, Metrics
 from TAE.visualizations.reconstruction import plot_reconstruction_from_batch
 from TAE.visualizations.latent_space import plot_latents
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 class GRUVAEExperiment(Experiment):
@@ -54,32 +55,35 @@ class GRUVAEExperiment(Experiment):
 
         self.log("val_loss", torch.mean(torch.tensor([o['loss'] for o in outputs])))
 
-        # Optional: log metrics like MeanFE or NRMSE
-        #evaluator = MetricsEvaluator(self, batch)
-        #metrics = evaluator.all_metrics()
         if self.metrics is not None:
             metrics = self.metrics(outputs[0])
             for metric in metrics:
                 #self.log(metric, metrics[metric])
                 self.logger.experiment.add_histogram(metric, metrics[metric], self.current_epoch)
-        #self.log("val_meanFE", metrics["MeanFE"].mean())
-        #self.log("val_NRMSE", metrics["NRMSE"].mean())
-
-        # Select best and worst reconstructions by squared error
-        #squared_error = (
-        #    ((batch["flux_full"] - out["reconstructed"]) ** 2)
-        #    .mean(dim=1)
-        #    .detach()
-        #    .cpu()
-        #    .numpy()
-        #)
-        squared_error = result['chi2'].detach().cpu().numpy()[:, 0]
-        best_idx = squared_error.argmin()
-        worst_idx = squared_error.argmax()
-        mid_idx = np.argsort(squared_error)[len(squared_error)//2]
-
-        for idx, name in zip((best_idx, worst_idx, mid_idx), ("Best", "Worst", "Median")):
-            fig = plot_reconstruction_from_batch(self.model, batch, idx_in_batch=idx, device=self.device)
-            self.logger.experiment.add_figure(name, fig, self.current_epoch)
 
         self.logger.experiment.add_figure('z_proj', plot_latents(outputs[0])['fig'], self.current_epoch)
+
+        sqrt_num_axes = int(np.sqrt(len(outputs)))
+        for name in ("Best", "Worst", "Median"):
+            fig, axes = plt.subplots(sqrt_num_axes, sqrt_num_axes, figsize=(6.4*sqrt_num_axes, 4.8*sqrt_num_axes))
+            for i, ax in enumerate(axes.flat if hasattr(axes, '__iter__') else [axes]):
+                result = outputs[i]
+                loss_val = result["loss"]
+                out = result["out"]
+                batch = result["batch"]
+
+                squared_error = result['chi2'].detach().cpu().numpy()[:, 0]
+                if name == "Best":
+                    idx = squared_error.argmin()
+                elif name == "Worst":
+                    idx = squared_error.argmax()
+                elif name == "Median":
+                    idx = np.argsort(squared_error)[len(squared_error)//2]
+                else:
+                    raise ValueError(f"{name} is an invalid lookup metric")
+
+                plot_reconstruction_from_batch(self.model, batch, idx_in_batch=idx, ax=ax, device=self.device)
+            fig.tight_layout()
+            self.logger.experiment.add_figure(name, fig, self.current_epoch)
+
+        
