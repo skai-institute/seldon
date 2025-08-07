@@ -82,11 +82,11 @@ trainer_params:
   devices: 1
   gradient_clip_val: 0.1
   accumulate_grad_batches: 4
-  resume_from_checkpoint: "/scratch/jackob/logs/BandAwareDeepSetGRUODEVAE_512_128_128/version_5/checkpoints/epoch=65-val_loss=1.01.ckpt"
+  #resume_from_checkpoint: "/scratch/jackob/logs/BandAwareDeepSetGRUODEVAE_512_128_128/version_5/checkpoints/epoch=65-val_loss=1.01.ckpt"
   #num_sanity_val_steps: 4
   #detect_anomaly: True
 
 logging_params:
   manual_seed: 42
-  save_dir: "/scratch/jackob/logs/"
+  save_dir: "logs"
   name: "BandAwareGRUODEVAE"
