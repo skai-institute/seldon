@@ -99,6 +99,7 @@ class GRUVAEExperiment(Experiment):
             self.logger.experiment.add_figure(name, fig, self.current_epoch)
 
         resid = percentile_forecast(self, batch)
+        percentiles = np.arange(1, 10)
 
         for key in resid:
             fig = plt.figure()
