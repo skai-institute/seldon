@@ -102,13 +102,14 @@ class GRUVAEExperiment(Experiment):
         percentiles = np.arange(1, 10)
 
         for key in resid:
-            fig = plt.figure()
-            plt.violinplot(resid[key], positions=percentiles*100, widths=5, showextrema=False, showmedians=True)
-            plt.ylim(-5, 5)
-            plt.xlabel('Percentage of Light Curve Seen')
-            plt.ylabel('Standardized Residuals')
-            plt.title(key)
-            self.logger.experiment.add_figure(f"Residual: {key} samples", fig, self.current_epoch)
+            if key in ['in', 'out', 'all']:
+                fig = plt.figure()
+                plt.violinplot(resid[key], positions=percentiles*100, widths=5, showextrema=False, showmedians=True)
+                plt.ylim(-5, 5)
+                plt.xlabel('Percentage of Light Curve Seen')
+                plt.ylabel('Standardized Residuals')
+                plt.title(key)
+                self.logger.experiment.add_figure(f"Residual: {key} samples", fig, self.current_epoch)
 
 
 
