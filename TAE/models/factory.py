@@ -1,7 +1,7 @@
 from TAE.models.decoders import Label_MLPDecoder, ConvDecoder, MLPBandDecoder
 
 
-from TAE.models.encoders import Label_MLPEncoder, MLPEncoder, ConvEncoder
+from TAE.models.encoders import Label_MLPEncoder, MLPEncoder, ConvEncoder, GRUMaskedEncoder
 from TAE.models.deepset import DeepSetEncoder
 from TAE.models.optimizer import Adam, RAdam, Ranger
 from TAE.models.scheduler import (
@@ -10,8 +10,10 @@ from TAE.models.scheduler import (
     ConstrainedExponentialSchedulerMaLagrange,
 )
 from TAE.models.vae_label import VAELabel
-from TAE.models.autoencoders import Autoencoder, BandAwareAutoencoder
+from TAE.models.autoencoders import Autoencoder, BandAwareAutoencoder, StudentGRUMasked
 from TAE.util import registry
+from TAE.models.ModelNN import ResNet
+from TAE.models.neuralode import RNNODEEncoder
 
 # from TAE.experiments.autoencoder_experiment import Experiment, AutoencoderExperiment
 
@@ -36,6 +38,8 @@ MODULES = {
     "VAELabel": VAELabel,
     "Autoencoder": Autoencoder,
     "BandAwareAutoencoder": BandAwareAutoencoder,
+    "GRUMaskedEncoder": GRUMaskedEncoder,
+    "student_gru_masked": StudentGRUMasked,
     # "Experiment": Experiment,
     # "AutoencoderExperiment": AutoencoderExperiment,
 }

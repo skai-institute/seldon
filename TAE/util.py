@@ -55,6 +55,7 @@ def extract_curves_from_filtered_data(filtered_data, min_points=20, class_filter
             class_names.append(class_name)
         else:
             light_curves.extend(band_dict)
+            class_names.extend([class_name]*len(band_dict))
 
     return light_curves, class_names
 

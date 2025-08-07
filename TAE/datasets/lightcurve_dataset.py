@@ -34,6 +34,7 @@ class LightCurvePreprocessor(Dataset):
         min_obs_fraction=0.5,
         num_aug_per_curve=3,
         t_max=200,
+        resample=False,
     ):
         self.full_light_curves = full_light_curves
         self.full_class_names = full_class_names
@@ -44,6 +45,16 @@ class LightCurvePreprocessor(Dataset):
         self.min_points = min_points
         self.min_obs_fraction = min_obs_fraction
         self.t_max = t_max
+        self.resample = resample
+
+        print("Weighting Classes...")
+        self.class_label_names = set(self.full_class_names)
+        self.class_map = dict(zip(self.class_label_names, range(len(self.class_label_names))))
+        self.label2class = dict(zip(self.class_map.values(), self.class_map.keys()))
+        self.class_counts = {key: self.full_class_names.count(key) for key in self.class_map}
+        self.class_weights = {key: len(self.full_class_names)/self.class_counts[key]/len(self.class_label_names) for key in self.class_counts}
+
+        print("Building Index...")
 
         # Build (light curve index, augmentation mode) list
         self.index_pairs = []
@@ -60,10 +71,15 @@ class LightCurvePreprocessor(Dataset):
 
         columns = ["days_since_first_observation", "FLUXCAL", "FLUXCALERR"]
 
+        
         self.full_light_curve_array = [
             df[columns].astype(np.float32).reset_index(drop=True).values
             for df in tqdm(self.full_light_curves, desc="Extracting LCs")
         ]
+
+        for arr in tqdm(self.full_light_curve_array, desc='Setting Negative Fluxes to Zero'):
+            arr[:, 1][arr[:, 1]<0] = 0.0
+        
 
         self.band_array = [
             df["band" if "band" in df.columns else "filter"]
@@ -77,29 +93,77 @@ class LightCurvePreprocessor(Dataset):
         self.max_length = max(self.full_lengths)
 
         if self.t_max == "infer":
-            ts = np.array([lc[:, 0].max()-lc[:, 0].min() for lc in self.full_light_curve_array])
+            ts = np.array([lc[:, 0].max()-lc[:, 0].min() for lc in tqdm(self.full_light_curve_array, desc="Getting Time Stats")])
             self.t_max = 2*ts.std() # +/- 1 sigma
             print("Inferred t_max =", self.t_max)
         print("Found Maximum Light Curve Length:", self.max_length)
+
+        # get flux stats
+        print("Getting Flux Stats...")
+        flat_lcs = np.concatenate(self.full_light_curve_array, axis=0)
+        if self.log_flux:
+            flat_lcs[:, 1] = np.sign(flat_lcs[:, 1]) * np.log10(np.abs(flat_lcs[:, 1]) + 1.0)
+            assert (flat_lcs[:, 1] >= 0).all()
+        self.flux_stats = {}
+        self.flux_stats['min'] = flat_lcs[:, 1].min()
+        self.flux_stats['max'] = flat_lcs[:, 1].max()
+        self.flux_stats['mean'] = flat_lcs[:, 1].mean()
+        self.flux_stats['std'] = flat_lcs[:, 1].std()
+        print('Got the Following Flux Stats:')
+        for key in self.flux_stats:
+            print(key, '|', self.flux_stats[key])
 
         print(
             f"Dataset contains {len(self.index_pairs)} samples from {len(full_light_curves)} full curves."
         )
 
     def apply_augmentation(self, lc, lc_band, mode):
-
+        """
+        Apply a single augmentation (cutoff / cuton / sparse / full) to
+        one light curve.  Guarantees that the returned segment has at least
+        `min_len` points; if that is impossible, falls back to returning the
+        full curve.
+        """
         n = len(lc)
+        peak_idx = lc[:, 1].argmax()            # column-1 is log-flux
+
+        # Decide the augmentation mode
         if self.augmentation == "mixed":
-            mode = np.random.choice(["cutoff", "cuton", "sparse", "full"])
+            mode = np.random.choice(["cutoff", "sparse"]) # "cuton", "sparse",
         else:
             mode = self.augmentation
 
+        # Minimum allowed length for any augmented curve
         min_len = max(self.min_points, int(self.min_obs_fraction * n))
-        if mode == "full" or (n <= min_len):
-            return lc, lc_band, np.arange(n), mode
+
+        # ------------------------------------------------------------------ #
+        # 1) CUTOFF  – keep pre-peak part
+        # ------------------------------------------------------------------ #
         if mode == "cutoff":
-            aug_idx = np.random.randint(min_len, n)
+            # 80 % chance to cut before the peak, 20 % anywhere
+            if np.random.rand() < 0.95:
+                hi = max(min(peak_idx, n - 1), min_len)
+            else:
+                hi = n
+
+            # If hi == min_len we cannot draw a randint range → fall back
+            if hi <= min_len:
+                # Fall back to returning the full curve (mode='full')
+                return lc, lc_band, np.arange(n), "full"
+
+            aug_idx = np.random.randint(min_len, hi)
             return lc[:aug_idx], lc_band[:aug_idx], np.arange(aug_idx), mode
+
+        # ------------------------------------------------------------------ #
+        # 2) CUTON  – keep post-peak part
+        # ------------------------------------------------------------------ #
+        if mode == "cuton":
+            hi = n - min_len
+            if hi <= 0:
+                return lc, lc_band, np.arange(n), "full"
+            aug_idx = np.random.randint(0, hi)
+            return lc[aug_idx:], lc_band[aug_idx:], np.arange(aug_idx, n), mode
+
         if mode == "cuton":
             hi = n - min_len
             aug_idx = np.random.randint(0, hi)
@@ -108,6 +172,9 @@ class LightCurvePreprocessor(Dataset):
             k = np.random.randint(min_len, n)
             aug_idx = np.sort(np.random.choice(n, k, replace=False))
             return lc[aug_idx], lc_band[aug_idx], aug_idx, mode
+        if mode == "full":
+            aug_idx = np.arange(n)
+            return lc, lc_band, aug_idx, mode
         else:
             raise NameError(
                 f'mode must be one of ("cutoff", "cuton", "sparse", "full") but got {mode}'
@@ -133,7 +200,7 @@ class LightCurvePreprocessor(Dataset):
                 float(scalar),
             )
 
-        if self.flux_normalization == "zscore":
+        elif self.flux_normalization == "zscore":
             if flux_norm_info is None:
                 mu = flux.mean()
                 sd = flux.std() or 1.0
@@ -142,6 +209,12 @@ class LightCurvePreprocessor(Dataset):
             flux = (flux - mu) / sd
             fluxerr = fluxerr / sd
             fluxnorm_info = ("log_flux", self.log_flux, "zscore", float(mu), float(sd))
+
+        elif self.flux_normalization == 'minmax':
+            scale = self.flux_stats['max'] - self.flux_stats['min']
+            flux = (flux - self.flux_stats['min']) / (scale) - 0.5
+            fluxerr = fluxerr / scale
+            fluxnorm_info = ("log_flux", self.log_flux, "minmax", float(self.flux_stats['min']), float(scale))
 
         return flux, fluxerr, fluxnorm_info
 
@@ -189,11 +262,12 @@ class LightCurvePreprocessor(Dataset):
     def get_raw_lightcurve(self, idx):
 
         lc_idx, mode = self.index_pairs[idx]
+        class_name = self.full_class_names[lc_idx]
         lc_full = self.full_light_curve_array[lc_idx].copy()
         band_idx_full = self.band_array[lc_idx] 
         length = self.full_lengths[lc_idx]
 
-        return lc_idx, mode, lc_full, band_idx_full, length
+        return lc_idx, mode, lc_full, band_idx_full, length, class_name
 
     def get_in_sample_mask(self, length, aug_idx):
 
@@ -223,18 +297,15 @@ class LightCurvePreprocessor(Dataset):
         padded_arr = np.zeros_like(arr, shape=shape)
         #print(padded_arr[padding_mask].shape, arr.shape)
         edge_arr = len(arr) # Do this since arr will have a smaller size
-        padded_arr[:edge_arr][padding_mask[:edge_arr]] = arr
+        #padded_arr[:edge_arr][padding_mask[:edge_arr]] = arr
+        # safer choice
+        valid_rows = padding_mask[:edge_arr]
+        padded_arr[:edge_arr][np.where(valid_rows)[0]] = arr
 
         return padded_arr
 
-    def __getitem__(self, idx):
-        """
-        Get the light curve and preform preprocessing
-        (augmentation, flux/time normalization) on the light curve.
-        For augmented light curves, return the full light curve as well.
-        """
-        lc_idx, mode, lc_full, band_idx_full, length = self.get_raw_lightcurve(idx)
-        lc_part, band_idx_part, aug_idx, mode = self.apply_augmentation(lc_full, band_idx_full, mode)
+    def preprocess(self, raw_idx, lc_full, band_idx_full, length, lc_part, band_idx_part, aug_idx, mode, class_name):
+
         (
             time_part,
             flux_part,
@@ -253,11 +324,14 @@ class LightCurvePreprocessor(Dataset):
         aug_mask = self.get_in_sample_mask(length, aug_idx)
         pad_mask = self.get_padding_mask(length)
 
-        
-
 
         scalar_f_part = np.full_like(time_part, flux_norm_info[-1])
-        x_input = np.vstack([time_part, flux_part, scalar_f_part]).T
+        ivar = 1/((flux_err_part)**2+1e-4)*1e-4 # the 1e-4 is a hyperparameter
+        x_input = np.vstack([time_part, flux_part, scalar_f_part, ivar]).T
+
+        scalar_f_full = np.full_like(time_full, flux_norm_info[-1])
+        ivar_full = 1/((flux_err_full)**2+1e-4)*1e-4 # the 1e-4 is a hyperparameter
+        x_input_full = np.vstack([time_full, flux_full, scalar_f_full, ivar_full]).T
 
         #print(mode, x_input.shape, pad_mask.sum(), length, len(pad_mask), aug_idx)
         #print("-------------------")
@@ -266,6 +340,7 @@ class LightCurvePreprocessor(Dataset):
 
         training_data = {
             "x_input": x_input,
+            "x_input_full": x_input_full,
             "time_part": time_part,
             "flux_part": flux_part,
             "flux_err_part": flux_err_part,
@@ -283,7 +358,7 @@ class LightCurvePreprocessor(Dataset):
             "time_norm_info": time_norm_info,
             "flux_norm_info": flux_norm_info,
             "augmentation": mode,
-            "raw_idx": lc_idx,
+            "raw_idx": raw_idx,
         }
 
         training_data = {key: self.pad(value, pad_mask) for key, value in training_data.items()}
@@ -291,6 +366,7 @@ class LightCurvePreprocessor(Dataset):
 
         return {
             "x_input": torch.from_numpy(training_data["x_input"]),
+            "x_input_full": torch.from_numpy(training_data["x_input_full"]),
             "time_part": torch.from_numpy(training_data["time_part"]).unsqueeze(1),
             "flux_part": torch.from_numpy(training_data["flux_part"]).unsqueeze(1),
             "flux_err_part": torch.from_numpy(training_data["flux_err_part"]).unsqueeze(1),
@@ -307,8 +383,26 @@ class LightCurvePreprocessor(Dataset):
             "time_norm_info": time_norm_info,
             "flux_norm_info": flux_norm_info,
             "augmentation": mode,
-            "raw_idx": lc_idx,
+            "raw_idx": raw_idx,
+            "class_name": class_name,
+            "class_weight": self.class_weights[class_name]
         }
+
+
+
+    def __getitem__(self, idx):
+        """
+        Get the light curve and preform preprocessing
+        (augmentation, flux/time normalization) on the light curve.
+        For augmented light curves, return the full light curve as well.
+        """
+        lc_idx, mode, lc_full, band_idx_full, length, class_name = self.get_raw_lightcurve(idx)
+        if self.resample:
+            lc_full[:, 1] = np.random.normal(loc=lc_full[:, 1], scale=lc_full[:, 2]).astype(lc_full.dtype)
+            lc_full[:, 1][lc_full[:, 1] < 0] = 0.0
+        lc_part, band_idx_part, aug_idx, mode = self.apply_augmentation(lc_full, band_idx_full, mode)
+        return self.preprocess(idx, lc_full, band_idx_full, length, lc_part, band_idx_part, aug_idx, mode, class_name)
+        
 
 
 # ======================================
@@ -374,8 +468,20 @@ def enhanced_collate_fn(batch):
     max_part = max(len(b["x_input"]) for b in batch)
     max_full = max(len(b["time_full"]) for b in batch)
 
+    for i in range(len(batch)):
+        b = batch[i]
+        b['x_input'][~b['in_sample_mask'][:, 0]] = b['x_input'][b['in_sample_mask'][:, 0]][-1] # Forward fill
+    x_input = torch.stack([b["x_input"] for b in batch])
+    time = x_input[:, :, 0] # (B, S)
+    mask = torch.stack(
+            [b["in_sample_mask"] for b in batch]
+        ).squeeze(2) # (B, S)
+    time_sorted = torch.sort(torch.unique(torch.ravel(time[mask])), dim=0, descending=True)[0] # (T)
+    sequence_batch_mask = torch.stack([((time == t0) & mask) for t0 in time_sorted]) #(T, B, S)
+
     coll = {
         "x_input": torch.stack([b["x_input"] for b in batch]),
+        "x_input_full": torch.stack([b["x_input_full"] for b in batch]),
         "band_idx": torch.stack([b["band_idx_part"] for b in batch]),
         "time_full": torch.stack([b["time_full"] for b in batch]),
         "flux_full": torch.stack([b["flux_full"] for b in batch]),
@@ -396,6 +502,10 @@ def enhanced_collate_fn(batch):
         "flux_norm_info": [b["flux_norm_info"] for b in batch],
         "time_norm_info": [b["time_norm_info"] for b in batch],
         "raw_idx": [b["raw_idx"] for b in batch],
+        "class_name": [b["class_name"] for b in batch],
+        "class_weight": torch.tensor([b["class_weight"] for b in batch]),
+        "time_sorted": time_sorted,
+        "sequence_batch_mask": sequence_batch_mask,
     }
     return coll
 
@@ -426,6 +536,7 @@ class SNDataModule(pl.LightningDataModule):
         class_filter=None,
         test_run=False,
         t_max=200,
+        resample=False,
     ):
         super().__init__()
         self.min_obs_fraction = min_obs_fraction
@@ -442,6 +553,7 @@ class SNDataModule(pl.LightningDataModule):
         self.class_filter = class_filter
         self.test_run = test_run
         self.t_max = t_max
+        self.resample = resample
 
         with open(lightcurve_path, "rb") as f:
             filtered_data = pickle.load(f)
@@ -465,7 +577,9 @@ class SNDataModule(pl.LightningDataModule):
                 augmentation=self.augmentation,
                 num_aug_per_curve=self.num_aug_per_curve,
                 min_obs_fraction=self.min_obs_fraction,
-                t_max=self.t_max
+                t_max=self.t_max,
+                resample=self.resample,
+                min_points=self.min_points
             )
         dataset = self.dataset
 
@@ -487,6 +601,7 @@ class SNDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=enhanced_collate_fn,
             prefetch_factor=10,
+            drop_last=True,
         )
 
     def val_dataloader(self):
@@ -497,6 +612,7 @@ class SNDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=enhanced_collate_fn,
             prefetch_factor=10,
+            drop_last=True,
         )
 
     def test_dataloader(self):
@@ -507,4 +623,5 @@ class SNDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=enhanced_collate_fn,
             prefetch_factor=10,
+            drop_last=True,
         )

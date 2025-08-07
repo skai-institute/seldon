@@ -1,9 +1,78 @@
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
+from torch.nn.parameter import Parameter
 
 
 # TODO: inherit ResNet and DenseNet from MLP.
+
+class NormalDistriubtionQuantileMapping(nn.Module):
+    '''Takes in a tensor from [-inf, inf], maps to cumulative normal, run through normal disrtibution quantile'''
+
+    def __init__(self, device=None, dtype=None, sigma_init: float=1.0, mu_init: float=0.0):
+        factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__()
+        self.sigma_init = sigma_init
+        self.mu_init = mu_init
+        self.mu = Parameter(torch.empty(1, **factory_kwargs))
+        self.sigma = Parameter(torch.empty(1, **factory_kwargs))
+        self.softplus = nn.Softplus()
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.constant_(self.mu, self.mu_init)
+        nn.init.constant_(self.sigma, self.sigma_init)
+
+    def forward(self, x):
+
+        x = 0.5 * (1 + torch.erf(x/2**0.5))
+        x = x.clamp(min=1e-7, max=1-1e-7)
+        x = self.mu + self.softplus(self.sigma) * 2**0.5 * torch.erfinv(2*x - 1)
+        return x
+
+class ExponentialDistriubtionQuantileMapping(nn.Module):
+    '''Takes in a tensor from [-inf, inf], maps to sigmoid, run through exponetial disrtibution quantile'''
+
+    def __init__(self, device=None, dtype=None, init: float = 1.0):
+        factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__()
+        self.lam = Parameter(torch.empty(1, **factory_kwargs))
+        self.init = init
+        self.sigmoid = nn.Sigmoid()
+        self.softplus = nn.Softplus()
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.constant_(self.lam, self.init)
+
+    def forward(self, x):
+
+        x = self.sigmoid(x).clamp(min=1e-7, max=1-1e-7)
+        x = -torch.log(1 - x) / self.softplus(self.lam)
+        return x
+
+
+
+class BinaryGELU(nn.Module):
+
+    def __init__(self, approximate: str="none", device=None, dtype=None, init: float = 0.0):
+
+        factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__()
+        self.approximate = approximate
+        self.init = init
+        self.weight = Parameter(torch.empty(2, **factory_kwargs))
+        self.reset_parameters()
+
+
+    def reset_parameters(self):
+        nn.init.constant_(self.weight, self.init)
+
+    def forward(self, x):
+
+        #return x + torch.sin((x - self.weight[0])*self.weight[1])
+        return F.gelu(x-self.weight[0], approximate=self.approximate) - F.gelu(x-self.weight[1], approximate=self.approximate)
 
 
 class RNNModel(nn.Module):
@@ -170,10 +239,10 @@ class ResNet(nn.Module):
             ]
         )
         self.output_layer = nn.Sequential(
-            nn.Linear(nhid, noutp), self.activation_function()
+            nn.Linear(nhid, noutp),
         )
 
-        self.init_weights()
+        #self.init_weights()
 
     def init_weights(self):
 

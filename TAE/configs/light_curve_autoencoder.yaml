@@ -1,51 +1,58 @@
 dataset:
   name: SNDataModule
   config:
-    lightcurve_path: TAE/data/cleaned_data_merged.pkl  
+    #lightcurve_path: TAE/data/cleaned_data_merged.pkl  
+    lightcurve_path: /u/jackob/skai/data/cleaned_data_8_previous_nondetects_zeroed_merged.pkl  
     class_filter: 
       - 'SNIa'        
-      - 'SNII'       
-    flux_normalization: max_partial_scalar
+    #  - 'SNII'     
+    #  - 'SNIb/c'
+    #  - 'SNIax'
+    #  - 'SN91bg'  
+    flux_normalization: minmax
     time_normalization: minmax
-    min_points: 3
-    augmentation: mixed
+    min_points: 15
+    augmentation: cutoff
     num_aug_per_curve: 1
-    batch_size: 2048
+    batch_size: 1024
     num_workers: 2
     test_run: False
     t_max: "infer"
-
-   
-
+    resample: False
+    min_obs_fraction: 0.0
 
 model_params:
   name: BandAwareAutoencoder
   config:
-    latent_dim: 8
+    latent_dim: 100
     variational: False
-    kl_weight: 0.001
+    kl_weight: 0.01
     loss: "Huber"
-    #num_bands: 6
-    #band_embedding_dim: 4
+    is_adversarial: True
+    adv_alpha: 0.8
+    adv_epsilon: 0.00005
     encoder:
       name: "DeepSetEncoder"
       config:
-        input_dim: 3
-        hidden_dim: 128
-        pooling: "mean"
+        input_dim: 100
+        hidden_dim: 256
+        pooling: "sum"
         activation: "PReLU"
-        dropout: 0.2
+        dropout: 0.0
     decoder: 
-      name: "SigmoidBasisDecoder"
+      name: "GaussianBasisDecoder"
       config:
-        latent_dim: 8
-        hidden: 128
-        BAND_EMB_DIM: 0
-        num_basis: 8
-        dropout: 0.2
+        latent_dim: 100
+        hidden: 256
+        BAND_EMB_DIM: 12
+        num_basis: 32
+        dropout: 0.5
         activation: "GELU"
-
-
+        decoupled: True
+        decouple_dim: 
+          - 20
+          - 20
+        band_dot_prod: True
 
 exp_params:
   name: GRUVAEExperiment
@@ -56,8 +63,8 @@ exp_params:
       optimizer: 
         name: "Adam"
         config:
-          LR: 3e-3
-          weight_decay: 1e-5 #1e-5 #1e-5 #1 #1 #1e-5
+          LR: 1e-4
+          weight_decay: 0.0 #2e-5 # 0.0 #2e-5 #1e-5
     metrics: 
       name: Metrics
       config:
@@ -71,7 +78,7 @@ trainer_params:
   max_epochs: 2000
   accelerator: "auto"
   devices: 1
-  gradient_clip_val: 1.0
+  gradient_clip_val: 0.1
 
 logging_params:
   manual_seed: 42

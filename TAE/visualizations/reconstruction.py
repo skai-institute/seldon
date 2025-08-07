@@ -38,6 +38,11 @@ def plot_full_multiband_dense_plot(model, batch, idx, device, ax=None, dense_pts
     t_max = np.max(np.abs(time)) * 1.2
     t_min = -t_max
     t_dense = torch.linspace(t_min, t_max, dense_pts)
+    if batch['flux_norm_info'][idx][2] == 'minmax':
+        flux += 0.5
+        flux *= batch['flux_norm_info'][idx][-1]
+    elif batch['flux_norm_info'][idx][2] == 'max_partial_scalar':
+        flux *=  batch['flux_norm_info'][idx][-1]
     flux = log_to_linear(flux)
     flux_err = sigma_log_to_linear(flux_err, flux)
     for j in range(6):
@@ -53,12 +58,17 @@ def plot_full_multiband_dense_plot(model, batch, idx, device, ax=None, dense_pts
                 device
             ),
             mask=batch["in_sample_mask_part"],  # Needs to be bands for decoding per time!
+            time_sorted=batch['time_sorted'],
+            sequence_batch_mask=batch['sequence_batch_mask'],
         )
 
         reconstruction = (
             out["reconstructed"][idx].detach().cpu().numpy()[:, 0]
         )
         mask = band == j
+        if batch['flux_norm_info'][idx][2] == 'minmax':
+            reconstruction += 0.5
+            reconstruction *= batch['flux_norm_info'][idx][-1]
 
         reconstruction = log_to_linear(reconstruction)
         
@@ -71,6 +81,7 @@ def plot_full_multiband_dense_plot(model, batch, idx, device, ax=None, dense_pts
             label=f"band {IDX2NAME[j]}",
             ls="none",
             color=BAND_COL[j],
+            alpha=0.8,
         )
 
         plt.errorbar(
@@ -89,6 +100,7 @@ def plot_full_multiband_dense_plot(model, batch, idx, device, ax=None, dense_pts
     plt.xlabel("Scaled Time")
     plt.ylabel("Scaled Flux")
     plt.xlim(-abs(time).max() * 1.2, abs(time).max() * 1.2)
+    plt.ylim(-0.5, flux.max()*1.5)
 
     return fig
 

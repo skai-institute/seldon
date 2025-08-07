@@ -2,7 +2,6 @@ name: tae
 channels:
   - conda-forge
   - http://ssb.stsci.edu/astroconda
-  - defaults
 dependencies:
   - python=3.9
   - pip
@@ -16,9 +15,15 @@ dependencies:
   - fastparquet
   - tensorboard
   - pip:
+    # use ONLY the PyTorch CUDA 12.6 index while installing torch*
+    - '--index-url=https://download.pytorch.org/whl/cu126'
+
     - torch
     - torchvision
     - torchaudio
+
+    # back to normal PyPI for everything else
+    - '--index-url=https://pypi.org/simple'
     - lightning
     - umap
     - omegaconf
@@ -27,4 +32,6 @@ dependencies:
     - hydra-core
     - requests
     - torch_optimizer
-
+    - git+https://github.com/martenlienen/torchode
+    - torchdiffeq
+    - safetensors

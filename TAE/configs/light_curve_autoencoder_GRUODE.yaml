@@ -1,0 +1,92 @@
+dataset:
+  name: SNDataModule
+  config:
+    lightcurve_path: /u/jackob/skai/data/cleaned_data_8_previous_nondetects_zeroed_merged.pkl
+    class_filter: 
+      - 'SNIa'        
+    #  - 'SNII'
+    #  - 'SNIb/c'
+    #  - 'SNIax'
+    #  - 'SN91bg'  
+    flux_normalization: minmax
+    time_normalization: minmax
+    min_points: 9
+    augmentation: cutoff
+    num_aug_per_curve: 1
+    batch_size: 1024
+    num_workers: 2
+    test_run: False
+    t_max: "infer"
+    resample: False
+    min_obs_fraction: 0.0
+
+model_params:
+  name: BandAwareAutoencoder
+  config:
+    latent_dim: 64
+    variational: True
+    kl_weight: 0.001
+    loss: "Huber"
+    is_adversarial: False
+    adv_epsilon: 0.0005
+    adv_alpha: 0.8
+    batch_ode: True
+    #num_bands: 6
+    #band_embedding_dim: 4
+    encoder:
+      name: "RecurrentODEEncoder"
+      config:
+        input_dim: 2
+        hidden_dim: 64
+        dropout: 0.0
+    decoder: 
+      name: "GaussianBasisDecoder"
+      config:
+        latent_dim: 64
+        hidden: 64
+        BAND_EMB_DIM: 8
+        num_basis: 8
+        dropout: 0.2
+        activation: "GELU"
+        decoupled: True
+        decouple_dim: 
+          - 8
+          - 8
+        band_dot_prod: True
+
+
+
+exp_params:
+  name: GRUVAEExperiment
+  config:
+    params:
+      dataset: SNDataModule
+      figures: []
+      optimizer: 
+        name: "Adam"
+        config:
+          LR: 2e-3
+          weight_decay: 0.0 #5e-5 #2e-3 #$0.0 #2e-5 #1e-4 #1e-5 #1e-5 #1 #1 #1e-5
+    metrics: 
+      name: Metrics
+      config:
+        metrics:
+          - fractional_errors
+          - z_scores
+          #- nrmse
+    # dataset will be filled by the fill_config function
+
+trainer_params:
+  max_epochs: 20000
+  accelerator: "auto"
+  devices: 1
+  gradient_clip_val: 0.1
+  accumulate_grad_batches: 4
+  resume_from_checkpoint: "/scratch/jackob/logs/BandAwareDeepSetGRUODEVAE_512_128_128/version_5/checkpoints/epoch=65-val_loss=1.01.ckpt"
+  #num_sanity_val_steps: 4
+  #detect_anomaly: True
+
+logging_params:
+  manual_seed: 42
+  save_dir: "/scratch/jackob/logs/"
+  name: "BandAwareGRUODEVAE"

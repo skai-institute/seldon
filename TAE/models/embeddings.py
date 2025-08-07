@@ -3,6 +3,22 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class LinearTimeEmbedding(nn.Module):
+    # https://arxiv.org/html/2409.20092v1
+
+    def __init__(self, emb_dim=1):
+
+        super().__init__()
+
+        self.emb_dim = emb_dim
+        self.transform = nn.Linear(1, emb_dim) # mx+k
+
+    def forward(self, t):
+
+        return self.transform(t)
+
+
+
 
 class PositionalEncoding(nn.Module):
     r"""Inject some information about the relative or absolute position of the tokens in the sequence.
@@ -51,7 +67,7 @@ class PositionalEncoding(nn.Module):
 
 class FPEmbedding(nn.Module):
 
-    def __init__(self, nvector, nemb, dropout=0.2):
+    def __init__(self, nvector, nemb, dropout=0.2, normalize=False):
         super().__init__()
 
         self.nvector = nvector  # size of the input vector to embed
@@ -60,6 +76,7 @@ class FPEmbedding(nn.Module):
 
         self.linear_transform = nn.Linear(nvector, nemb)
         self.norm = nn.LayerNorm(nemb)
+        self.normalize = normalize
 
         self.init_weights()
 
@@ -79,5 +96,6 @@ class FPEmbedding(nn.Module):
                 raise ValueError("Input Vector Has the incorrect shape!")
             return self.forward(torch.unsqueeze(x, -1))
         x = self.linear_transform(x)
-        x = self.norm(x)
+        if self.normalize:
+            x = self.norm(x)
         return x

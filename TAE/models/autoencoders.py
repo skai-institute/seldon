@@ -4,10 +4,16 @@ import torch
 from torch import nn
 from dataclasses import dataclass
 from .loss import *
+import pytorch_lightning as pl
+from pathlib import Path
+import torch.nn.functional as F
 
 from .encoders import GRUEncoder
 from .decoders import MLPBandDecoder
 from .parametric_decoders import BazinDecoder
+from TAE.util import register_module
+
+
 
 
 def init_weights(m):
@@ -48,6 +54,7 @@ class Autoencoder(nn.Module):
         self.criterion = nn.MSELoss()
 
     def forward(self, x, mask):
+
         latent = self.encoder(x)
         reconstructed = self.decoder(latent)
 
@@ -86,6 +93,10 @@ class BandAwareAutoencoder(nn.Module):
         encoder="GRUEncoder",
         decoder="MLP",
         loss='mse',
+        is_adversarial: bool=False,
+        adv_alpha: float = 0.9,
+        adv_epsilon: float = 0.0005,
+        batch_ode: bool=False,
         **kwargs
     ):
         
@@ -96,6 +107,11 @@ class BandAwareAutoencoder(nn.Module):
             latent_dim: dimension of latent z vector
         """
         super().__init__()
+
+        self.is_adversarial = is_adversarial
+        self.adv_alpha = adv_alpha
+        self.adv_epsilon = adv_epsilon
+        self.batch_ode = batch_ode
 
         if loss == 'NLL':
             self.recon_loss = MaskedGaussianNLL()
@@ -130,7 +146,7 @@ class BandAwareAutoencoder(nn.Module):
 
         self.apply(init_weights)
 
-    def forward(self, x, t, band_idx_part, band_idx_full, mask=None):
+    def forward(self, x, t, band_idx_part, band_idx_full, mask=None, time_sorted=None, sequence_batch_mask=None):
         """
         Forward pass through encoder and decoder.
 
@@ -143,7 +159,10 @@ class BandAwareAutoencoder(nn.Module):
             dict with 'reconstructed', 'z_mean', 'z_logvar'
         """
         #z, z_mean, z_logvar = self.encoder(x, band_idx_part)
-        memory = self.encoder(x, band_idx_part, mask)
+        if self.batch_ode:
+            memory = self.encoder(x, band_idx_part, mask, time_sorted, sequence_batch_mask)
+        else:
+            memory = self.encoder(x, band_idx_part, mask)
         z_mean = self.fc_mean(memory)
         z_logvar = torch.clamp(self.fc_logvar(memory), min=-10.0, max=2.0)
 
@@ -189,6 +208,7 @@ class BandAwareAutoencoder(nn.Module):
         z_mean=out["z_mean"]
         z_logvar=out["z_logvar"]
         sigma = batch["flux_err_full"]
+        weight = batch["class_weight"]
 
         reconstruction_loss = self.recon_loss(out, batch)
 
@@ -202,7 +222,7 @@ class BandAwareAutoencoder(nn.Module):
             kl = 0
 
         total_loss = (
-            torch.mean(reconstruction_loss) + self.kl_weight * kl
+            torch.mean(reconstruction_loss*weight) + self.kl_weight * kl
         )  # +
         #   self.smooth_weight * smooth_penalty
         # )
@@ -210,14 +230,150 @@ class BandAwareAutoencoder(nn.Module):
         return {"loss": total_loss, 'squared_error': reconstruction_loss}
 
     def training_step(self, batch, batch_idx):
-        out = self(
-            x=batch["x_input"],
-            t=batch["time_full"],
-            band_idx_part=batch["band_idx"],
-            band_idx_full=batch["band_idx_full"],
-            mask=batch["in_sample_mask_part"]
-        )
 
-        loss = self.loss_function(out, batch)
+        if self.is_adversarial:
+            delta_t = torch.tensor(0.0, requires_grad=True) # time-translation invariance
+            delta_log_A = torch.tensor(0.0, requires_grad=True) # scale invariance
+
+            #batch["x_input"][:, :, 0] = batch["x_input"][:, :, 0] + delta_t
+            batch["x_input_full"] = torch.cat(
+                (
+                    batch["x_input_full"][..., :1] + delta_t, 
+                    batch["x_input_full"][..., 1:2]*torch.exp(delta_log_A), 
+                    batch["x_input_full"][..., 2:]
+                ), 
+                dim=-1)
+            batch["time_full"] = batch["time_full"] + delta_t
+            batch['flux_full'] = batch["flux_full"] * torch.exp(delta_log_A)
+            batch['flux_err_full'] = batch["flux_err_full"] * torch.exp(delta_log_A)
+
+            out = self(
+                x=batch["x_input_full"],
+                t=batch["time_full"],
+                band_idx_part=batch["band_idx_full"],
+                band_idx_full=batch["band_idx_full"],
+                mask=batch["pad_mask_full"],
+                time_sorted=batch['time_sorted'],
+                sequence_batch_mask=batch['sequence_batch_mask'],
+            )
+
+            loss = self.loss_function(out, batch)
+
+        else:
+            out = self(
+                x=batch["x_input"],
+                t=batch["time_full"],
+                band_idx_part=batch["band_idx"],
+                band_idx_full=batch["band_idx_full"],
+                mask=batch["in_sample_mask_part"],
+                time_sorted=batch['time_sorted'],
+                sequence_batch_mask=batch['sequence_batch_mask'],
+            )
+
+            loss = self.loss_function(out, batch)
+            #print(loss['loss'])
+
+
+        if self.is_adversarial:
+            loss["loss"].backward(retain_graph=True)
+            batch_adv = {}
+            batch_adv.update(batch)
+            
+            # Do a cut-off augmentation
+            batch_adv['flux_full'] = out['reconstructed'].clone()
+
+            dt = torch.clamp(torch.sign(delta_t.grad.data)*torch.exp(torch.randn(1)[0])*self.adv_epsilon, max=0.5, min=-0.5)
+            dA = torch.exp(torch.clamp(torch.sign(delta_log_A.grad.data)*torch.exp(torch.randn(1)[0])*self.adv_epsilon, max=0.5, min=-0.5))
+
+            batch_adv["x_input"] = torch.cat(
+                (
+                    batch_adv["x_input"][..., :1]+dt, 
+                    batch_adv["x_input"][..., 1:2]*dA, 
+                    batch_adv["x_input"][..., 2:]
+                ), 
+                dim=-1)
+            batch_adv["time_full"] = batch_adv["time_full"].clone() + dt
+            batch_adv["flux_full"] = batch_adv["flux_full"].clone() * dA
+            batch_adv["flux_err_full"] = batch_adv["flux_err_full"].clone() * dA
+
+
+            out_adv = self.forward(
+                x=batch_adv["x_input"], 
+                t=batch_adv["time_full"], 
+                band_idx_part=batch_adv["band_idx"], 
+                band_idx_full=batch_adv["band_idx_full"], 
+                mask=batch_adv["in_sample_mask_part"],
+                time_sorted=batch_adv['time_sorted'],
+                sequence_batch_mask=batch_adv['sequence_batch_mask'],)
+            
+            loss_adv = self.loss_function(out_adv, batch_adv)
+
+            loss['loss'] = self.adv_alpha * loss['loss'] + (1 - self.adv_alpha) * loss_adv['loss']
+            #batch.update(batch_adv)
 
         return loss
+
+
+
+@register_module             
+class StudentGRUMasked(BandAwareAutoencoder):
+    """
+    Student model (plain nn.Module) that re-uses BandAwareAutoencoder for the
+    student network and adds a latent-space KD term against a *frozen* teacher.
+    """
+
+    def __init__(self, teacher_ckpt: str = None, lambda_kd: float = 0.7, **ae_cfg):
+        # -------------------------- student nets -----------------------------
+        super().__init__(**ae_cfg)
+        self.lambda_kd = lambda_kd
+
+        # -------------------------- load teacher -----------------------------
+        if teacher_ckpt and Path(teacher_ckpt).exists():
+            ckpt        = torch.load(teacher_ckpt, map_location="cpu")
+            raw_dict    = ckpt["state_dict"] if "state_dict" in ckpt else ckpt
+
+            # strip the Lightning prefix  ("model.") so keys match exactly
+            clean_dict  = {k.replace("model.", ""): v for k, v in raw_dict.items()}
+
+            teacher     = BandAwareAutoencoder(**ae_cfg)
+            missing, unexpected = teacher.load_state_dict(clean_dict, strict=False)
+            print(f"✓ teacher loaded  (missing {len(missing)}, unexpected {len(unexpected)})")
+
+            teacher.eval().requires_grad_(False)
+            self.teacher = teacher
+        else:
+            print("Teacher checkpoint not found - KD disabled")
+            self.teacher   = None
+            self.lambda_kd = 0.0            # disable KD gracefully
+
+    # -------------------------------------------------------------------------
+    def training_step(self, batch, _batch_idx=0):
+        band_part = batch.get("band_idx_part", batch["band_idx"])
+
+        # ---------------- student forward ------------------------------------
+        out_s = self(
+            x=batch["x_input"],
+            t=batch["time_full"],
+            band_idx_part=band_part,
+            band_idx_full=batch["band_idx_full"],
+            mask=batch["in_sample_mask"],
+        )
+        losses = self.loss_function(out_s, batch)        # contains "loss"
+        loss   = losses["loss"]
+
+        # ---------------- KD term --------------------------------------------
+        if self.teacher is not None:
+            with torch.no_grad():
+                out_t = self.teacher(
+                    x=batch["x_input"],
+                    t=batch["time_full"],
+                    band_idx_part=band_part,
+                    band_idx_full=batch["band_idx_full"],
+                    mask=batch["in_sample_mask"],
+                )
+            kd = F.mse_loss(out_s["z_mean"], out_t["z_mean"])
+            loss += self.lambda_kd * kd
+            losses["kd_loss"] = kd
+
+        losses["loss"] = loss
+        return losses

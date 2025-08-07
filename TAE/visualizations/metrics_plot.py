@@ -72,8 +72,8 @@ def plot_learning_curve(model, batch, *,
         with torch.no_grad():
             pred_log = model(batch_part)
 
-        true_lin = log_to_linear(batch_part["flux_full"])
-        pred_lin = log_to_linear(pred_log)
+        true_lin = log_to_linear(batch_part["flux_full"]+0.5)
+        pred_lin = log_to_linear(pred_log+0.5)
 
         if metric == "MeanFE":
             denom = true_lin.abs().clamp_min(0.1)

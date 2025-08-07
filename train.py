@@ -7,6 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
+#from pytorch_lightning.profiler import PyTorchProfiler
 
 from TAE.datasets.dataset_factory import get_module as get_dataset
 from TAE.experiments.factory import get_module as get_experiment
@@ -18,6 +19,8 @@ import torch
 
 os.environ["HYDRA_FULL_ERROR"] = "1"
 torch.set_float32_matmul_precision('high')
+#torch._inductor.config.triton.cudagraph_skip_dynamic_graphs=True
+#torch._dynamo.config.capture_scalar_outputs = True
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,7 @@ def main(cfg: DictConfig) -> None:
 
     # === Load model ===
     model = get_module(cfg["model_params"]["name"], config["model_params"]["config"])
+    #model.compile(mode="reduce-overhead")
 
     # === Prepare datamodule manually ===
     data = get_dataset(config["dataset"]["name"], config["dataset"]["config"])
@@ -62,10 +66,20 @@ def main(cfg: DictConfig) -> None:
         {"model": model, "data": data, **config["exp_params"]["config"]},
     )
 
+    if 'resume_from_checkpoint' in cfg['trainer_params']:
+        if cfg['trainer_params']['resume_from_checkpoint'] is not None:
+            chkpt = cfg['trainer_params']['resume_from_checkpoint']
+            experiment.load_from_checkpoint(checkpoint_path=chkpt,
+                        model=model,
+                        data=data,
+                        params=cfg["exp_params"]["config"]["params"]);
+            cfg['trainer_params']['resume_from_checkpoint'] = None
+
     # === Log and run ===
     tb_logger.log_hyperparams(params=cfg)
     logger.info(f"{tb_logger.save_dir}")
 
+    #profiler = PyTorchProfiler(filename="trace_name.prof")
     runner = Trainer(
         enable_checkpointing=True,
         callbacks=[checkpoint_callback],
