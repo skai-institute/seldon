@@ -4,9 +4,16 @@ channels:
   - http://ssb.stsci.edu/astroconda
 dependencies:
   - python=3.9
-  - pip
+  - pytorch=2.7.1=cuda129_generic_py39_h8a31f19_204
+  - lightning=2.5.2
+  - lightning-bolts=0.7.0
+  - lightning-utilities=0.15.2
+  - torchvision
+  - hydra-core
+  - omegaconf
   - numpy
   - seaborn
+  - pandas
   - scipy
   - astropy
   - scikit-learn
@@ -14,22 +21,10 @@ dependencies:
   - pyarrow
   - fastparquet
   - tensorboard
+  - h5py
+  - pip
   - pip:
-    # use ONLY the PyTorch CUDA 12.6 index while installing torch*
-    - '--index-url=https://download.pytorch.org/whl/cu126'
-
-    - torch
-    - torchvision
-    - torchaudio
-
-    # back to normal PyPI for everything else
-    - '--index-url=https://pypi.org/simple'
-    - lightning
     - umap
-    - omegaconf
-    - lightning-bolts
-    - h5py
-    - hydra-core
     - requests
     - torch_optimizer
     - git+https://github.com/martenlienen/torchode
