@@ -247,18 +247,22 @@ class RecurrentODEEncoder(nn.Module):
             batch_first=True,
             bias=True,
         )
-        self.rnn = torch.compile(self.rnn)
+        #self.rnn = torch.compile(self.rnn)
 
         self.linear_layer = nn.Linear(input_dim + BAND_EMB_DIM, hidden_dim)
 
         #additional tests
         self.to_latent_timeseries = ODEDecoder(hidden_size=hidden_dim, activation='Softplus', batch_first=True)
         self.to_latent_timeseries.integrator = self.rnn.integrator
+        #self.to_latent_timeseries = torch.compile(self.to_latent_timeseries)
         #self.deepset = SimpleDeepSet(hidden_dim, hidden_dim, activation='PReLU', dropout=dropout)
         # Want to include times
         self.deepset = SimpleDeepSet(hidden_dim+1, hidden_dim, activation='PReLU', dropout=dropout)
+        self.t_grid = None
         #self.fc_mean = nn.Linear(hidden_dim, latent_dim)
         #self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
+
+        self.compile()
 
 
     def forward(self, x, band_idx, mask, time_sorted, sequence_batch_mask):
@@ -290,14 +294,15 @@ class RecurrentODEEncoder(nn.Module):
         #h_n = h_n.squeeze(0)  # (B, hidden_dim)
         #return h_n
 
-        t_grid = torch.linspace(0.0, 2.0, 50, device=x.device) # (S)
-        _, zs = self.to_latent_timeseries(t_grid, h_n) # (B, S, E)
+        if self.t_grid is None:
+            self.t_grid = torch.linspace(0.0, 2.0, 50, device=x.device).detach() # (S)
+        _, zs = self.to_latent_timeseries(self.t_grid, h_n) # (B, S, E)
         #print('zs',torch.nan_to_num(zs))
         #print(torch.nan_to_num(zs).mean(dim=1))
         #print('zs', torch.nan_to_num(zs))
         #assert torch.all(torch.isfinite(zs))
         # concat the time points!
-        zs = torch.cat((zs, t_grid.expand(zs.shape[0], -1)[:, :, None]), dim=-1)
+        zs = torch.cat((zs, self.t_grid.expand(zs.shape[0], -1)[:, :, None]), dim=-1)
         z = self.deepset(zs) # (B, H)
         #assert torch.all(torch.isfinite(z))
         #print('z', z)

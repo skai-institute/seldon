@@ -19,14 +19,15 @@ class ODESolver(nn.Module):
         self.step_method = tode.Tsit5(self.term)
         #self.step_size_controller = tode.IntegralController(atol=1e-5, rtol=1e-3, term=self.term)
         #self.step_size_controller = tode.FixedStepController()
-        self.step_size_controller = tode.PIDController(atol=1.0, rtol=1.0, pcoeff=0.2, icoeff=0.5, dcoeff=0.0, term=self.term, dt_max=0.1, dt_min=-0.1)
-        #self.solver = tode.AutoDiffAdjoint(self.step_method, self.step_size_controller)
-        self.solver = tode.BacksolveAdjoint(self.term, self.step_method, self.step_size_controller)
-        self.jit_solver = torch.compile(self.solver)
+        self.step_size_controller = tode.PIDController(atol=1.0, rtol=1.0, pcoeff=0.2, icoeff=0.5, dcoeff=0.0, term=self.term, dt_max=0.5, dt_min=-0.5)
+        self.solver = tode.AutoDiffAdjoint(self.step_method, self.step_size_controller)
+        #self.solver = tode.BacksolveAdjoint(self.term, self.step_method, self.step_size_controller)
+        #self.jit_solver = torch.compile(self.solver)
 
     def forward(self, x, t):
+        #dt0 = torch.full((x.shape[0],), 0.1, device=x.device).detach()
 
-        sol = self.jit_solver.solve(tode.InitialValueProblem(y0=x, t_eval=t))
+        sol = self.solver.solve(tode.InitialValueProblem(y0=x, t_eval=t))
         return sol.ts, sol.ys
 
 @register_module
@@ -48,41 +49,14 @@ class ODEDecoder(nn.Module):
 
     def forward(self, time, hx):
 
-        #assert torch.all(torch.isfinite(hx))
-        #assert torch.all(torch.isfinite(time))
-        #print('time', time)
-        #return 
         ts, h_p = self.integrator(hx, time.expand(hx.shape[0], -1))
-        #assert torch.all(torch.isfinite(h_p)), ts
-        #print(ts, h_p)
         return ts, h_p
-        output = [hx]
-        h_t_minus_1 = hx
-        #print("Integrating Decoder")
-        seq_len = time.shape[0]
-        for t in range(1, seq_len):
-            #print(t)
-            t0 = time[t-1]
-            t1 = time[t]
-            n_points = max(2, int(torch.floor((t0 - t1)/self.dt)))
-            ts = torch.linspace(t0, t1+1e-7, n_points, device=time.device)
-            
-            h_t = self.integrator(self.ode_net, h_t_minus_1, ts, atol=1e-3, rtol=1e-5, method='rk4')[1]
-            #ts = torch.stack([t0, t1])[None, :].expand(h_t_minus_1.shape[0], -1).contiguous()
-            #h_t = self.integrator(h_t_minus_1, ts)[1][:, -1]
-            
-            output.append(h_t)
-            h_t_minus_1 = h_t
-        output = torch.stack(output)
-        #print("Integrated", seq_len, "steps")
-        if self.batch_first:
-            output = output.transpose(0, 1)
-        return h_t, output
+
 
 @register_module
 class RNNODEEncoder(nn.Module):
     
-    def __init__(self, hidden_size, bias=True, device=None, dtype=None, dt=0.05, batch_first=False, dropout=0.0):
+    def __init__(self, hidden_size, bias=True, device=None, dtype=None, dt=0.0001, batch_first=False, dropout=0.0):
 
         super().__init__()
 
