@@ -73,7 +73,7 @@ class RNNODEEncoder(nn.Module):
         self.integrator = ODESolver(self.ode_net)
         #self.integrator = odeint
 
-    def forward(self, x, time, mask, time_sorted, sequence_batch_mask, hx=None):
+    def forward(self, x, time, mask, time_sorted=None, sequence_batch_mask=None, hx=None):
         # x is (S, B, E) where E is input_size
         # time is (S, B)
         # Want (S, B) iteration, mask updates at t = batch[time], pre-sort time

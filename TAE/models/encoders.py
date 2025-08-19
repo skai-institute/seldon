@@ -227,7 +227,7 @@ class RecurrentODEEncoder(nn.Module):
     Encodes [time, normalized flux] sequences into latent vector z.
     """
 
-    def __init__(self, input_dim=3, hidden_dim=128, dropout=0.0, BAND_EMB_DIM=2, NUM_BANDS=6):
+    def __init__(self, input_dim=3, hidden_dim=128, dropout=0.0, BAND_EMB_DIM=2, NUM_BANDS=6, t_max=2.0, N_points=50):
         """
         Args:
             input_dim: number of input features (e.g., time + normalized flux + dummy 1)
@@ -239,6 +239,8 @@ class RecurrentODEEncoder(nn.Module):
         self.hidden_dim = hidden_dim
         self.NUM_BANDS = NUM_BANDS
         self.BAND_EMB_DIM = BAND_EMB_DIM
+        self.t_max = t_max
+        self.N_points = N_points
 
         self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM, scale_grad_by_freq=True)
         self.float_embedding = FPEmbedding(1, input_dim)
@@ -265,7 +267,7 @@ class RecurrentODEEncoder(nn.Module):
         self.compile()
 
 
-    def forward(self, x, band_idx, mask, time_sorted, sequence_batch_mask):
+    def forward(self, x, band_idx, mask, time_sorted=None, sequence_batch_mask=None):
         """
         Args:
             x: (B, T, input_dim) input sequence
@@ -287,7 +289,8 @@ class RecurrentODEEncoder(nn.Module):
         x = torch.cat([x, e_b], dim=-1)
         #assert torch.all(torch.isfinite(x))
         x = self.linear_layer(x)
-        x[~mask] = 0.0
+        #x[~mask] = 0.0
+        x = x.masked_fill_(~mask.unsqueeze(-1), 0.0)
         #assert torch.all(torch.isfinite(x)), ("Input X Emb!", x[~torch.isfinite(x)])
 
         _, h_n = self.rnn(x, t, mask, time_sorted, sequence_batch_mask)  # h_n: (B, hidden_dim)
@@ -295,7 +298,8 @@ class RecurrentODEEncoder(nn.Module):
         #return h_n
 
         if self.t_grid is None:
-            self.t_grid = torch.linspace(0.0, 2.0, 50, device=x.device).detach() # (S)
+            self.t_grid = torch.linspace(0.0, self.t_max, self.N_points, device=x.device).detach() # (S)
+
         _, zs = self.to_latent_timeseries(self.t_grid, h_n) # (B, S, E)
         #print('zs',torch.nan_to_num(zs))
         #print(torch.nan_to_num(zs).mean(dim=1))

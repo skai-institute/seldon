@@ -24,14 +24,14 @@ def percentile_forecast(experiment, batch):
                 t=samples["time_full"].to(experiment.device),
                 band_idx_part=samples["band_idx"].to(experiment.device),
                 band_idx_full=samples["band_idx_full"].to(experiment.device),
-                mask=samples["in_sample_mask_part"].to(experiment.device),
-                time_sorted=samples['time_sorted'].to(experiment.device),
-                sequence_batch_mask=samples['sequence_batch_mask'].to(experiment.device),
+                mask=samples["in_sample_mask"].to(experiment.device),
+                time_sorted=None,
+                sequence_batch_mask=None,
             )
             
             residuals = (samples['flux_full'].to(experiment.device) - out["reconstructed"])/samples["flux_err_full"].to(experiment.device)
-            residuals_in_sample = residuals[samples['in_sample_mask_part'].to(experiment.device)].view(-1)
-            residuals_out_sample = residuals[~samples['in_sample_mask_part'].to(experiment.device) & samples["pad_mask_full"].to(experiment.device)].view(-1)
+            residuals_in_sample = residuals[samples['in_sample_mask'].to(experiment.device)].view(-1)
+            residuals_out_sample = residuals[~samples['in_sample_mask'].to(experiment.device) & samples["pad_mask_full"].to(experiment.device)].view(-1)
             residuals = residuals[samples["pad_mask_full"].to(experiment.device)].view(-1)
             resid['in'].append(residuals_in_sample.detach().cpu().numpy())
             resid['out'].append(residuals_out_sample.detach().cpu().numpy())

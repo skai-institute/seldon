@@ -57,7 +57,7 @@ def plot_full_multiband_dense_plot(model, batch, idx, device, ax=None, dense_pts
             band_idx_full=bands.expand(len(batch["x_input"]), dense_pts, 1).to(
                 device
             ),
-            mask=batch["in_sample_mask_part"],  # Needs to be bands for decoding per time!
+            mask=batch["in_sample_mask"],  # Needs to be bands for decoding per time!
             time_sorted=batch['time_sorted'],
             sequence_batch_mask=batch['sequence_batch_mask'],
         )

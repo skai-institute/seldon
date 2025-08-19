@@ -265,7 +265,7 @@ class BandAwareAutoencoder(nn.Module):
                 t=batch["time_full"],
                 band_idx_part=batch["band_idx"],
                 band_idx_full=batch["band_idx_full"],
-                mask=batch["in_sample_mask_part"],
+                mask=batch["in_sample_mask"],
                 time_sorted=batch['time_sorted'],
                 sequence_batch_mask=batch['sequence_batch_mask'],
             )
@@ -302,7 +302,7 @@ class BandAwareAutoencoder(nn.Module):
                 t=batch_adv["time_full"], 
                 band_idx_part=batch_adv["band_idx"], 
                 band_idx_full=batch_adv["band_idx_full"], 
-                mask=batch_adv["in_sample_mask_part"],
+                mask=batch_adv["in_sample_mask"],
                 time_sorted=batch_adv['time_sorted'],
                 sequence_batch_mask=batch_adv['sequence_batch_mask'],)
             

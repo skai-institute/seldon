@@ -476,8 +476,8 @@ def enhanced_collate_fn(batch):
     mask = torch.stack(
             [b["in_sample_mask"] for b in batch]
         ).squeeze(2) # (B, S)
-    time_sorted = torch.sort(torch.unique(torch.ravel(time[mask])), dim=0, descending=True)[0] # (T)
-    sequence_batch_mask = torch.stack([((time == t0) & mask) for t0 in time_sorted]) #(T, B, S)
+    time_sorted = None #torch.sort(torch.unique(torch.ravel(time[mask])), dim=0, descending=True)[0] # (T)
+    sequence_batch_mask = None #torch.stack([((time == t0) & mask) for t0 in time_sorted]) #(T, B, S)
 
     coll = {
         "x_input": torch.stack([b["x_input"] for b in batch]),
@@ -491,14 +491,11 @@ def enhanced_collate_fn(batch):
         "in_sample_mask": torch.stack(
             [b["in_sample_mask"] for b in batch]
         ).squeeze(2),
-        "in_sample_mask_part": torch.stack(
-            [b["in_sample_mask"] for b in batch]
-        ).squeeze(2),
         "pad_mask_full": torch.stack([b["pad_mask"] for b in batch]).squeeze(2),
         "lengths": torch.tensor([b["length"] for b in batch]),
-        "full_lengths": torch.tensor([b["length"] for b in batch]),
-        "peak_time": torch.tensor([b["peak_time"] for b in batch]),
-        "peak_flux": torch.tensor([b["peak_flux"] for b in batch]),
+        #"full_lengths": torch.tensor([b["length"] for b in batch]),
+        #"peak_time": torch.tensor([b["peak_time"] for b in batch]),
+        #"peak_flux": torch.tensor([b["peak_flux"] for b in batch]),
         "flux_norm_info": [b["flux_norm_info"] for b in batch],
         "time_norm_info": [b["time_norm_info"] for b in batch],
         "raw_idx": [b["raw_idx"] for b in batch],
@@ -600,8 +597,11 @@ class SNDataModule(pl.LightningDataModule):
             shuffle=True,
             num_workers=self.num_workers,
             collate_fn=enhanced_collate_fn,
-            prefetch_factor=10,
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=2,
             drop_last=True,
+            in_order=False,
         )
 
     def val_dataloader(self):
@@ -611,7 +611,9 @@ class SNDataModule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=enhanced_collate_fn,
-            prefetch_factor=10,
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=2,
             drop_last=True,
         )
 
@@ -622,6 +624,8 @@ class SNDataModule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=enhanced_collate_fn,
-            prefetch_factor=10,
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=2,
             drop_last=True,
         )

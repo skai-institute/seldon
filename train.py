@@ -1,3 +1,7 @@
+import os
+os.environ["HYDRA_FULL_ERROR"] = "1"
+os.environ['CUDA_LAUNCH_BLOCKING'] = "0"
+
 import logging
 import sys
 import hydra
@@ -14,13 +18,19 @@ from TAE.experiments.factory import get_module as get_experiment
 from TAE.models.factory import get_module
 from TAE.util import fill_config
 from TAE.datasets import dataset_factory
-import os
+
 import torch
 
-os.environ["HYDRA_FULL_ERROR"] = "1"
+
 torch.set_float32_matmul_precision('high')
+torch.set_num_threads(int(os.environ['OMP_NUM_THREADS']))
+torch.set_num_interop_threads(int(os.environ['OMP_NUM_THREADS']))
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 #torch._inductor.config.triton.cudagraph_skip_dynamic_graphs=True
 #torch._dynamo.config.capture_scalar_outputs = True
+#torch._dynamo.config.recompile_limit = 12
+
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +56,10 @@ def main(cfg: DictConfig) -> None:
     checkpoint_callback = ModelCheckpoint(
         monitor="val_loss",
         mode="min",
-        save_weights_only=True,
+        save_weights_only=False,
         filename="{epoch}-{val_loss:.2f}",
         verbose=True,
-        save_last=True,
+        save_last=False,
         every_n_epochs=1,
     )
 

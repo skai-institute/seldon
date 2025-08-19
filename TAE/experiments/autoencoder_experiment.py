@@ -21,20 +21,20 @@ class GRUVAEExperiment(Experiment):
         """
         Forward pass: reconstruct flux values over full time grid.
         """
-        #print(batch['in_sample_mask_part'].shape, batch['x_input'].shape)
+       
         return self.model(
             x=batch["x_input"],
             t=batch["time_full"],
             band_idx_part=batch["band_idx"],
             band_idx_full=batch["band_idx_full"],
-            mask=batch["in_sample_mask_part"],
+            mask=batch["in_sample_mask"],
             time_sorted=batch['time_sorted'],
             sequence_batch_mask=batch['sequence_batch_mask'],
         )
 
     def training_step(self, batch, batch_idx):
         results = self.model.training_step(batch, batch_idx)
-        self.log("train_loss", results["loss"])
+        self.log("train_loss", results["loss"], sync_dist=True)
         return results
 
     def validation_step(self, batch, batch_idx):
@@ -44,7 +44,7 @@ class GRUVAEExperiment(Experiment):
             t=batch["time_full"],
             band_idx_part=batch["band_idx"],
             band_idx_full=batch["band_idx_full"],
-            mask=batch["in_sample_mask_part"],
+            mask=batch["in_sample_mask"],
             time_sorted=batch['time_sorted'],
             sequence_batch_mask=batch['sequence_batch_mask'],
         )
@@ -54,13 +54,14 @@ class GRUVAEExperiment(Experiment):
         return {"loss": loss["loss"], "out": out, "batch": batch, 'chi2': loss['squared_error']}
 
     def validation_epoch_end(self, outputs):
+        
         result = outputs[0]  # just visualize one batch
         loss_val = result["loss"]
         out = result["out"]
         batch = result["batch"]
 
-        self.log("val_loss", torch.mean(torch.tensor([o['loss'] for o in outputs])))
-
+        self.log("val_loss", torch.mean(torch.tensor([o['loss'] for o in outputs])), sync_dist=True)
+        #return
         if self.metrics is not None:
             metrics = self.metrics(outputs[0])
             for metric in metrics:
@@ -73,7 +74,7 @@ class GRUVAEExperiment(Experiment):
 
         self.logger.experiment.add_figure('z_proj', plot_latents(outputs[0])['fig'], self.current_epoch)
 
-        sqrt_num_axes = min(int(np.sqrt(len(outputs))), 4) # Only plot 4 samples because plots get huge
+        sqrt_num_axes = min(int(np.sqrt(len(outputs))), 2) # Only plot 4 samples because plots get huge
         for name in ("Best", "Worst", "Median", "Static"):
             fig, axes = plt.subplots(sqrt_num_axes, sqrt_num_axes, figsize=(6.4*sqrt_num_axes, 4.8*sqrt_num_axes))
             for i, ax in enumerate(axes.flat if hasattr(axes, '__iter__') else [axes]):
@@ -98,6 +99,7 @@ class GRUVAEExperiment(Experiment):
             fig.tight_layout()
             self.logger.experiment.add_figure(name, fig, self.current_epoch)
 
+        return
         resid = percentile_forecast(self, batch)
         percentiles = np.arange(1, 10)
 
