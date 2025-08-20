@@ -1,5 +1,5 @@
 dataset:
-  name: SNDataModule
+  name: SNDataModuleParquet
   config:
     lightcurve_path: /u/jackob/skai/data/cleaned_data_8_previous_nondetects_zeroed_merged.pkl
     class_filter: 
@@ -60,7 +60,7 @@ exp_params:
   name: GRUVAEExperiment
   config:
     params:
-      dataset: SNDataModule
+      dataset: SNDataModuleParquet
       figures: []
       optimizer: 
         name: "Adam"
@@ -77,7 +77,7 @@ exp_params:
     # dataset will be filled by the fill_config function
 
 trainer_params:
-  max_epochs: 2
+  max_epochs: 30
   accelerator: "auto"
   devices: 1
   gradient_clip_val: 0.1
