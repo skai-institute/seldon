@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from TAE.util import register_module
-from TAE.models.embeddings import LinearTimeEmbedding, FPEmbedding
+from TAE.models.embeddings import LinearTimeEmbedding, FPEmbedding, PlotterEmbedding, PositionalEncoding
 from TAE.models.ModelNN import ResNet
 from TAE.models.neuralode import RNNODEEncoder, ODEDecoder
 from TAE.models.deepset import SimpleDeepSet
@@ -227,7 +227,7 @@ class RecurrentODEEncoder(nn.Module):
     Encodes [time, normalized flux] sequences into latent vector z.
     """
 
-    def __init__(self, input_dim=3, hidden_dim=128, dropout=0.0, BAND_EMB_DIM=2, NUM_BANDS=6, t_max=2.0, N_points=50):
+    def __init__(self, input_dim=3, hidden_dim=128, dropout=0.0, BAND_EMB_DIM=2, NUM_BANDS=6, t_max=2.0, N_points=50, nlayers=4, pooling="mean", norm=True):
         """
         Args:
             input_dim: number of input features (e.g., time + normalized flux + dummy 1)
@@ -241,13 +241,16 @@ class RecurrentODEEncoder(nn.Module):
         self.BAND_EMB_DIM = BAND_EMB_DIM
         self.t_max = t_max
         self.N_points = N_points
+        self.nlayers = nlayers
 
-        self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM, scale_grad_by_freq=True)
+        self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM, scale_grad_by_freq=False)
         self.float_embedding = FPEmbedding(1, input_dim)
         self.rnn = RNNODEEncoder(
             hidden_dim,
             batch_first=True,
             bias=True,
+            nlayers=nlayers,
+            norm=norm
         )
         #self.rnn = torch.compile(self.rnn)
 
@@ -259,12 +262,12 @@ class RecurrentODEEncoder(nn.Module):
         #self.to_latent_timeseries = torch.compile(self.to_latent_timeseries)
         #self.deepset = SimpleDeepSet(hidden_dim, hidden_dim, activation='PReLU', dropout=dropout)
         # Want to include times
-        self.deepset = SimpleDeepSet(hidden_dim+1, hidden_dim, activation='PReLU', dropout=dropout)
+        self.deepset = SimpleDeepSet(hidden_dim+1, hidden_dim, activation='PReLU', dropout=dropout, pooling=pooling)
         self.t_grid = None
         #self.fc_mean = nn.Linear(hidden_dim, latent_dim)
         #self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
 
-        self.compile()
+        self.compile(mode='max-autotune-no-cudagraphs')
 
 
     def forward(self, x, band_idx, mask, time_sorted=None, sequence_batch_mask=None):
@@ -277,42 +280,37 @@ class RecurrentODEEncoder(nn.Module):
             z_mean: mean of latent distribution (B, latent_dim)
             z_logvar: log-variance of latent distribution (B, latent_dim)
         """
-        #assert torch.all(torch.isfinite(x)), "Input X Raw!"
-        #assert torch.all(torch.isfinite(band_idx)), "Input band_idx Raw!"
-        e_b = self.band_emb(band_idx[:, :, 0])
+        if self.t_grid is None:
+            self.t_grid = torch.linspace(0.0, self.t_max, self.N_points, device=x.device).detach() # (S)
+
+        '''
+        t = x[..., 0]
+        f = x[..., 1]
+        b = band_idx.squeeze(2)
+
+        x = self.embedder(t, f, b, mask)
+        '''
+        #################
+        e_b = self.band_emb(band_idx.squeeze(2))
         t = x[..., 0]
         f = x[..., 1:2]
         f_emb = self.float_embedding(f)
-        #assert torch.all(torch.isfinite(f_emb)), (f[~torch.isfinite(f)], self.float_embedding.linear_transform.weight, self.linear_layer.weight)
         x = f_emb
-        #assert torch.all(torch.isfinite(f_emb))
         x = torch.cat([x, e_b], dim=-1)
-        #assert torch.all(torch.isfinite(x))
         x = self.linear_layer(x)
         #x[~mask] = 0.0
         x = x.masked_fill_(~mask.unsqueeze(-1), 0.0)
-        #assert torch.all(torch.isfinite(x)), ("Input X Emb!", x[~torch.isfinite(x)])
+        #################
+        
 
         _, h_n = self.rnn(x, t, mask, time_sorted, sequence_batch_mask)  # h_n: (B, hidden_dim)
         #h_n = h_n.squeeze(0)  # (B, hidden_dim)
         #return h_n
 
-        if self.t_grid is None:
-            self.t_grid = torch.linspace(0.0, self.t_max, self.N_points, device=x.device).detach() # (S)
-
         _, zs = self.to_latent_timeseries(self.t_grid, h_n) # (B, S, E)
-        #print('zs',torch.nan_to_num(zs))
-        #print(torch.nan_to_num(zs).mean(dim=1))
-        #print('zs', torch.nan_to_num(zs))
-        #assert torch.all(torch.isfinite(zs))
         # concat the time points!
         zs = torch.cat((zs, self.t_grid.expand(zs.shape[0], -1)[:, :, None]), dim=-1)
         z = self.deepset(zs) # (B, H)
-        #assert torch.all(torch.isfinite(z))
-        #print('z', z)
-        #print(z.shape)
-        #print(z)
-
         return z
 
 
@@ -386,7 +384,7 @@ class TransformerEncoder(nn.Module):
         nhead: int = 8,
         num_encoder_layers: int = 6,
         NUM_BANDS: int = 6,
-        activation: str = 'ReLU'
+        activation: str = 'PReLU'
     ):
         super().__init__()
 
@@ -404,8 +402,13 @@ class TransformerEncoder(nn.Module):
             num_encoder_layers=num_encoder_layers, 
             dim_feedforward=hidden_dim,
             dropout=dropout,
-            batch_first=True
+            batch_first=True,
+            activation="gelu"
         )
+
+        self.position_embeddings = nn.Parameter(torch.randn(size=(1, 1, input_dim)), requires_grad=True)
+
+        self.embedder = PlotterEmbedding(N_width=100, N_height=input_dim, gamma=1.0, output_dim=input_dim) # NEW!
 
         self.encoder = self.transformer.encoder
         #self.phi_out = nn.Sequential(
@@ -416,7 +419,7 @@ class TransformerEncoder(nn.Module):
         #)
 
         self.phi_out = nn.Sequential(
-            ResNet(input_dim, hidden_dim, nlayers=4, nhid=hidden_dim, activation=activation, dropout=dropout),
+            ResNet(input_dim, hidden_dim, nlayers=2, nhid=hidden_dim, activation=activation, dropout=dropout),
             self.activation(),
         )
 
@@ -424,7 +427,7 @@ class TransformerEncoder(nn.Module):
 
 
 
-    def forward(self, x, band_idx, mask):
+    def forward(self, x, band_idx, mask, time_sorted=None, sequence_batch_mask=None):
         """
         Args:
             x: (B, T, input_dim) input sequence
@@ -434,6 +437,7 @@ class TransformerEncoder(nn.Module):
             z_mean: mean of latent distribution (B, latent_dim)
             z_logvar: log-variance of latent distribution (B, latent_dim)
         """
+        '''
         e_b = self.band_emb(band_idx[:, :, 0])
         t = x[..., :1]
         t_emb = self.time_embedding(t)
@@ -441,12 +445,16 @@ class TransformerEncoder(nn.Module):
         f_emb = self.float_embedding(f)
         x = f_emb + t_emb + e_b
         x[~mask] = 0.0
+        '''
+        t = x[..., 0]
+        f = x[..., 1]
+        b = band_idx.squeeze(2)
+        x = self.embedder(t, f, b, mask) + self.position_embeddings
         if self.attn_mask is None:
             self.attn_mask = self.transformer.generate_square_subsequent_mask(x.shape[1], device=x.device)
-        memory = self.encoder(x, mask=self.attn_mask, src_key_padding_mask=~mask, is_causal=True)  # h_n: (B, S, input_dim)
+        memory = self.encoder(x, mask=self.attn_mask, is_causal=True)  # h_n: (B, S, input_dim)
         memory = (self.phi_out(memory)*mask.unsqueeze(-1)).sum(1)
 
-        
         return memory
 
         return z, z_mean, z_logvar

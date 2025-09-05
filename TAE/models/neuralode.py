@@ -19,7 +19,10 @@ class ODESolver(nn.Module):
         self.step_method = tode.Tsit5(self.term)
         #self.step_size_controller = tode.IntegralController(atol=1e-5, rtol=1e-3, term=self.term)
         #self.step_size_controller = tode.FixedStepController()
-        self.step_size_controller = tode.PIDController(atol=1.0, rtol=1.0, pcoeff=0.2, icoeff=0.5, dcoeff=0.0, term=self.term, dt_max=0.5, dt_min=-0.5)
+        self.step_size_controller = tode.PIDController(
+            atol=1.0, rtol=1.0, pcoeff=0.2, icoeff=0.5, 
+            dcoeff=0.0, term=self.term, dt_max=0.5, dt_min=-0.5
+        )
         self.solver = tode.AutoDiffAdjoint(self.step_method, self.step_size_controller)
         #self.solver = tode.BacksolveAdjoint(self.term, self.step_method, self.step_size_controller)
         #self.jit_solver = torch.compile(self.solver)
@@ -56,7 +59,7 @@ class ODEDecoder(nn.Module):
 @register_module
 class RNNODEEncoder(nn.Module):
     
-    def __init__(self, hidden_size, bias=True, device=None, dtype=None, dt=0.0001, batch_first=False, dropout=0.0):
+    def __init__(self, hidden_size, bias=True, device=None, dtype=None, dt=0.0001, batch_first=False, dropout=0.0, nlayers=4, norm=True):
 
         super().__init__()
 
@@ -69,7 +72,7 @@ class RNNODEEncoder(nn.Module):
         self.dropout = dropout
 
         self.rnn_cell = nn.GRUCell(hidden_size, hidden_size, bias=bias, device=device, dtype=dtype)
-        self.ode_net = ODEFunc(hidden_size, hidden_size, nhid=hidden_size, nlayers=4, dropout=dropout)
+        self.ode_net = ODEFunc(hidden_size, hidden_size, nhid=hidden_size, nlayers=nlayers, dropout=dropout, norm=norm)
         self.integrator = ODESolver(self.ode_net)
         #self.integrator = odeint
 
@@ -87,23 +90,29 @@ class RNNODEEncoder(nn.Module):
             hx = torch.zeros(batch_size, self.hidden_size, device=x.device)
         h_t_minus_1 = hx
         h_t = hx
-        output = []
+
+        # TODO: This function is wrong if there is sparse masked points (or band masks!)
+        # The h_p's need to be maintained when evolved to masked points in time
+        # or we can forward fill them in the dataloader
+        # we should think about which method is more general and easier to extend
+        #output = []
         for t in range(1, seq_len):
             t0 = time[seq_len-t] # (B)
             t1 = time[seq_len-t-1] # (B)
-            ts = torch.stack([t0, t1-self.dt*(t1==t0)]).t().contiguous() # (B, 2)
-            h_p = self.integrator(h_t_minus_1, ts)[1][:, -1] # (B, 2), when t1 == t0 this gives nans
+            ts = torch.stack([t0, t1-self.dt*(t1==t0)]).t().contiguous().detach() # (B, 2) # USE THE t1==t0 MASK!
+            h_p = self.integrator(h_t_minus_1, ts)[1][:, -1] #* mask[seq_len-t][:, None] # (B, 2), when t1 == t0 this gives nans!
             #assert torch.all(torch.isfinite(h_p)), ts
             total_mask = mask[seq_len-t-1][:, None]
-            h_t = self.rnn_cell(x[seq_len-t-1], h_p) * total_mask + (~total_mask) * h_t_minus_1
+            h_t = self.rnn_cell(x[seq_len-t-1], h_p) * total_mask + (~total_mask) * h_p #h_t_minus_1, # NOTE: THIS IS THE CHANGE
             #assert torch.all(torch.isfinite(h_t))
-            output.append(h_t)
+            #output.append(h_t)
             h_t_minus_1 = h_t
             #break
-        output = torch.stack(output)
-        if self.batch_first:
-            output = output.transpose(0, 1)
-        return output, h_t
+        #output = torch.stack(output)
+        #if self.batch_first:
+        #    output = output.transpose(0, 1)
+        return None, h_t
+        #return output, h_t
 
 
     def forward_s(self, x, time, mask, time_sorted, sequence_batch_mask, hx=None):

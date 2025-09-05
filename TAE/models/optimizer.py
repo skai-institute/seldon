@@ -102,7 +102,8 @@ class Adam:
             lr=self.lr,
             weight_decay=self.weight_decay,
         )
-        return optims
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optims, cooldown=5, factor=0.5)
+        return [optims], [{"scheduler": scheduler, "interval": "epoch", "monitor": "train_loss"}]
         # if self.scheduler_gamma is not None:
         #     scheduler = optim.lr_scheduler.ExponentialLR(
         #         optims[0], gamma=self.scheduler_gamma

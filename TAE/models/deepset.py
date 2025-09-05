@@ -3,7 +3,7 @@ import torch.nn as nn
 from TAE.util import register_module
 from typing import Union
 import torch.nn.functional as F
-from TAE.models.ModelNN import ResNet, BinaryGELU
+from TAE.models.ModelNN import ResNet, BinaryGELU, LearnedMLPBlock
 from TAE.models.embeddings import LinearTimeEmbedding, FPEmbedding
 
 NUM_BANDS = 6  # keep the same constants you use elsewhere
@@ -69,6 +69,8 @@ class EquivariantDeepSetEncoder(nn.Module):
                 NUM_BANDS
                 )
 
+        
+
     def forward(self, x: torch.Tensor, band_idx: torch.Tensor, mask: Union[torch.Tensor, None] = None):
 
         e_b = self.band_emb(band_idx[:, :, 0])
@@ -90,33 +92,44 @@ class SimpleDeepSet(nn.Module):
         hidden_dim: int = 128,
         pooling: str = "sum",
         dropout: float = 0.2,
-        activation: str = "ReLU",
+        activation: str = "PReLU",
     ):
         super().__init__()
-        if pooling not in {"mean", "sum", "max"}:
-            raise ValueError("pooling must be one of {'mean', 'sum', 'max'}")
+        if pooling not in {"mean", "sum", "max", "all"}:
+            raise ValueError("pooling must be one of {'mean', 'sum', 'max', 'all'}")
         
         self.hidden_dim = hidden_dim
         self.dropout = dropout
         self.activation = getattr(nn, activation)
         self.phi_out = self.activation()
-        self.phi = ResNet(input_dim, hidden_dim, nlayers=4, nhid=hidden_dim, activation=activation, dropout=dropout)
+        self.phi = ResNet(input_dim, hidden_dim, nlayers=2, nhid=hidden_dim, activation=activation, dropout=dropout)
+        self.rho = ResNet(hidden_dim, hidden_dim, nlayers=2, nhid=hidden_dim, activation=activation, dropout=dropout)
         self.pooling = pooling  # commutative aggregation
+        if self.pooling == "all":
+            self.transform_shapes = nn.Linear(hidden_dim*4, hidden_dim)
+
+        #self.out_final = nn.Sequential(
+        #    LearnedMLPBlock(hidden_dim, hidden_dim, hidden_dim=None, activation=activation),
+        #)
+
 
     # --- helper ------------------------------------------------------------
-    def _aggregate(self, h: torch.Tensor, mask: Union[torch.Tensor, None] = None):
+    def _aggregate(self, h: torch.Tensor, mask=None):
         """
         h    : (B, N, hidden_dim)
         mask : (B, N)  with 1 for valid points, 0 for padding
         """
-        if mask is None:
+        if self.pooling == "mean":
             return h.mean(dim=1)
         elif self.pooling == "sum":
             #return h.sum(dim=1)
-            return (h*mask.unsqueeze(-1)).sum(dim=1)
-
+            return h.sum(dim=1)
         elif self.pooling == "max":
-            return torch.max(h, dim=-1) #.max(dim=1).values
+            return torch.max(h, dim=1)[0] #.max(dim=1).values
+        elif self.pooling == "min":
+            return torch.min(h, dim=1)[0]
+        elif self.pooling == "all":
+            return self.transform_shapes(torch.cat([h.mean(dim=1), h.sum(dim=1), torch.max(h, dim=1)[0], torch.min(h, dim=1)[0]], dim=1))
 
         # mean (default) – optionally masked    
         masked = h * mask.unsqueeze(-1)
@@ -140,7 +153,7 @@ class SimpleDeepSet(nn.Module):
 
         h = self.phi_out(self.phi(x))                  # element-wise encoding (phi)
         h = self._aggregate(h, mask)     # permutation-invariant pooling (Sigma)
-        #z = self.rho(h)                  # set-level mapping (rho)
+        z = self.rho(h)                  # set-level mapping (rho)
         z = h
         return z
 
@@ -157,8 +170,8 @@ class DeepSetEncoder(nn.Module):
         NUM_BANDS: int = 6,
     ):
         super().__init__()
-        if pooling not in {"mean", "sum", "max"}:
-            raise ValueError("pooling must be one of {'mean', 'sum', 'max'}")
+        if pooling not in {"mean", "sum", "max", "min", "all"}:
+            raise ValueError("pooling must be one of {'mean', 'sum', 'max', 'min', 'all'}")
         
         self.num_bands = NUM_BANDS
         self.band_emb_dim = BAND_EMB_DIM
@@ -183,7 +196,10 @@ class DeepSetEncoder(nn.Module):
         #)
 
         self.pooling = pooling  # commutative aggregation
+        if self.pooling == "all":
+            self.transform_shapes = nn.Linear(hidden_dim*4, hidden_dim)
         #self.softmax = nn.LogSoftmax(dim=-1)
+
         
         #self.norm = nn.BatchNorm1d(input_dim)
 
@@ -205,9 +221,27 @@ class DeepSetEncoder(nn.Module):
         elif self.pooling == "sum":
             #return h.sum(dim=1)
             return (h*mask.unsqueeze(-1)).sum(dim=1)
+        elif self.pooling == "mean":
+            return h * mask.unsqueeze(-1).sum(dim=1)/mask.sum(dim=1, keepdim=True)
 
         elif self.pooling == "max":
-            return torch.max(h, dim=-1) #.max(dim=1).values
+            return torch.max(h * mask.unsqueeze(-1), dim=1)[0] #.max(dim=1).values
+
+        elif self.pooling == "min":
+            return torch.min(h * mask.unsqueeze(-1), dim=1)[0]
+
+        elif self.pooling == "all":
+            return self.transform_shapes(
+                torch.cat(
+                    [
+                        h * mask.unsqueeze(-1).sum(dim=1)/mask.sum(dim=1, keepdim=True), 
+                        (h*mask.unsqueeze(-1)).sum(dim=1), 
+                        torch.max(h * mask.unsqueeze(-1), dim=1)[0], 
+                        torch.min(h * mask.unsqueeze(-1), dim=1)[0]
+                        ], dim=1
+                    )
+                )
+
 
         # mean (default) – optionally masked
         

@@ -49,7 +49,7 @@ def plot_latents(output,
 
     # Dimensionality reduction
     if method == "pca":
-        Z_proj = PCA(n_components=n_components, random_state=42, whiten=True).fit_transform(z)
+        Z_proj = PCA(n_components=n_components, random_state=42, whiten=True).fit_transform(z[:, 2:])
     else:
         Z_proj = umap.UMAP(n_components=n_components, random_state=42).fit_transform(z)
 

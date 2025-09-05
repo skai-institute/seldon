@@ -19,6 +19,7 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
         NUM_BANDS=6,
         BAND_EMB_DIM=4,
         DF=3,
+        nlayers=4,
         activation: str = "GELU",
         dropout: float = 0.0,
         decouple_dim: typing.Optional[typing.Union[typing.List, int, None]] = None,
@@ -33,6 +34,7 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
         self.decouple_dim = decouple_dim
         self.band_dot_prod = band_dot_prod
         self.inp_dim = 0
+        self.nlayers = nlayers
 
         # Do some checks on the parameters
         if isinstance(self.decouple_dim, list):
@@ -51,7 +53,8 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 DF=DF,
                 activation=activation,
                 dropout=dropout,
-                band_dot_prod=band_dot_prod)
+                band_dot_prod=band_dot_prod,
+                nlayers=self.nlayers)
         elif isinstance(self.decouple_dim, int):
             self.first_decoder = None
             self.inp_dim = self.decouple_dim
@@ -65,7 +68,8 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 activation=activation,
                 dropout=dropout,
                 decouple_dim=self.decouple_dim,
-                band_dot_prod=band_dot_prod)
+                band_dot_prod=band_dot_prod,
+                nlayers=self.nlayers)
         
         else:
             print(self.decouple_dim)
@@ -80,7 +84,8 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 activation=activation,
                 dropout=dropout,
                 decouple_dim=self.decouple_dim[0],
-                band_dot_prod=band_dot_prod)
+                band_dot_prod=band_dot_prod,
+                nlayers=self.nlayers)
             self.decoder = GeneralizedDecoupledBandParametricDecoder(
                 latent=latent - self.inp_dim,
                 hidden=hidden,
@@ -91,7 +96,8 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 activation=activation,
                 dropout=dropout,
                 decouple_dim=self.decouple_dim[2:],
-                band_dot_prod=band_dot_prod
+                band_dot_prod=band_dot_prod,
+                nlayers=self.nlayers
             )
 
     def forward(self, z, t, band_idx):
@@ -118,11 +124,13 @@ class DecoupledBandParametricDecoder(nn.Module): # TODO: Generalize this (amp in
         activation: str = "GELU",
         dropout: float = 0.0,
         decouple_dim: int = 1,
+        nlayers=4,
         band_dot_prod: bool = False,
     ):
         super().__init__()
         self.decouple_dim = decouple_dim
         self.band_dot_prod = band_dot_prod
+        self.nlayers = nlayers
 
         self.to_time = BandParametricDecoder(
             latent=self.decouple_dim,
@@ -133,7 +141,8 @@ class DecoupledBandParametricDecoder(nn.Module): # TODO: Generalize this (amp in
             DF=1,
             activation=activation,
             dropout=dropout,
-            band_dot_prod=band_dot_prod)
+            band_dot_prod=band_dot_prod,
+            nlayers=self.nlayers)
         self.to_params = BandParametricDecoder(
             latent=latent-self.decouple_dim,
             hidden=hidden,
@@ -143,7 +152,8 @@ class DecoupledBandParametricDecoder(nn.Module): # TODO: Generalize this (amp in
             DF=DF-1,
             activation=activation,
             dropout=dropout,
-            band_dot_prod=band_dot_prod
+            band_dot_prod=band_dot_prod,
+            nlayers=self.nlayers
         )
 
     def forward(self, z, t, band_idx):
@@ -166,6 +176,7 @@ class BandParametricDecoder(nn.Module):
         DF=3,
         activation: str = "GELU",
         dropout: float = 0.0,
+        nlayers=4,
         band_dot_prod = False,
     ):
         super().__init__()
@@ -176,16 +187,17 @@ class BandParametricDecoder(nn.Module):
         self.activation = getattr(nn, activation)
         self.dropout = dropout
         self.band_dot_prod = band_dot_prod
+        self.nlayers=nlayers
         if self.BAND_EMB_DIM > 0:
-            self.band_emb = nn.Embedding(self.NUM_BANDS, self.BAND_EMB_DIM, scale_grad_by_freq=True)
+            self.band_emb = nn.Embedding(self.NUM_BANDS, self.BAND_EMB_DIM, scale_grad_by_freq=False)
 
         if self.band_dot_prod:
             assert self.BAND_EMB_DIM > 0, "Cannot perform a dot product without a band embedding"
             inp = latent # multiply and sum z @ e_b
-            self.mlp = ResNet(inp, BAND_EMB_DIM * self.DF * K, nlayers=4, nhid=hidden, activation=activation, dropout=dropout)
+            self.mlp = ResNet(inp, BAND_EMB_DIM * self.DF * K, nlayers=self.nlayers, nhid=hidden, activation=activation, dropout=dropout)
         else:
             inp = latent + BAND_EMB_DIM  # concat z‖e_b
-            self.mlp = ResNet(inp, NUM_BANDS * self.DF * K, nlayers=4, nhid=hidden, activation=activation, dropout=dropout)
+            self.mlp = ResNet(inp, NUM_BANDS * self.DF * K, nlayers=self.nlayers, nhid=hidden, activation=activation, dropout=dropout)
         #self.mlp = nn.Sequential(
         #    nn.Linear(inp, hidden),
         #    self.activation(),
@@ -200,11 +212,11 @@ class BandParametricDecoder(nn.Module):
 
         #z = z.unsqueeze(1).expand(z.shape[0], band_idx.shape[1], z.shape[1]) # (B, S, E)
         if self.BAND_EMB_DIM > 0:
-            z = z.unsqueeze(1).expand(z.shape[0], band_idx.shape[1], z.shape[1])
+            z = z.unsqueeze(1).expand(z.shape[0], band_idx.shape[1], z.shape[1]) # (B, S, E), maybe do this after mlp
             e_b = self.band_emb(band_idx[:, :, 0])  # (B,seq,E)
             if not self.band_dot_prod:
                 z = torch.cat([z, e_b], dim=-1)
-            params = self.mlp(z) # (B, 3K) # Should be (B, band, 3k)
+            params = self.mlp(z) # (B, 3K) # Should be (B, band, 3k), apply same mlp for each E in the sequnce (clones)
         else:
             if not self.band_dot_prod:
                 params = self.mlp(z).unsqueeze(1).expand(z.shape[0], band_idx.shape[1], -1)
@@ -316,11 +328,13 @@ class GaussianBasisDecoder(nn.Module):
         activation="GELU", dropout=0.0, 
         decoupled=False, decouple_dim=1,
         band_dot_prod=False,
+        nlayers=4
     ):
         super().__init__()
         self.band_dot_prod = band_dot_prod
         self.num_basis = num_basis
         self.multiple_decouple = isinstance(decouple_dim, list)
+        self.nlayers=nlayers
         DF = 4
         if self.multiple_decouple:
             DF += 1
@@ -336,7 +350,8 @@ class GaussianBasisDecoder(nn.Module):
                 activation=activation,
                 dropout=dropout,
                 decouple_dim=decouple_dim,
-                band_dot_prod=band_dot_prod
+                band_dot_prod=band_dot_prod,
+                nlayers=self.nlayers
             )
         else:
             self.to_params = BandParametricDecoder(
@@ -348,7 +363,8 @@ class GaussianBasisDecoder(nn.Module):
                 DF=DF,
                 activation=activation,
                 dropout=dropout,
-                band_dot_prod=band_dot_prod
+                band_dot_prod=band_dot_prod,
+                nlayers=self.nlayers
             )
         self.softplus = nn.Softplus()
         self.exp_map = ExponentialDistriubtionQuantileMapping(init=0.25)
@@ -411,11 +427,13 @@ class SigmoidBasisDecoder(nn.Module):
         NUM_BANDS=6, BAND_EMB_DIM=4, 
         activation="GELU", dropout=0.0, 
         decoupled=False, decouple_dim=1,
+        nlayers=4,
         band_dot_prod=False,
     ):
         super().__init__()
         self.num_basis = num_basis
         self.band_dot_prod = band_dot_prod
+        self.nlayers = nlayers
         # DF = 3 → (w_raw, μ_raw, log σ)
         self.multiple_decouple = isinstance(decouple_dim, list)
         DF = 4
@@ -494,7 +512,8 @@ class SigmoidBasisDecoder(nn.Module):
         self.last_weight = weights.detach()
 
         # Weighted sum of bases → (B, T, 1)
-        out = torch.log(1 + torch.mean(weights * basis, dim=-1, keepdim=True)) - 0.5
+        f = torch.mean(weights * basis, dim=-1, keepdim=True)
+        out = torch.sign(f)*torch.log(1 + torch.abs(f)) - 0.5
         return out
 
 

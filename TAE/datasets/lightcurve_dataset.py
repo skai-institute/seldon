@@ -89,12 +89,17 @@ class LightCurvePreprocessor(Dataset):
             for df in tqdm(self.full_light_curves, desc="Mapping Bands to Indices")
         ]
 
+        all_bands = np.hstack(self.band_array)
+        bin_counts = np.bincount(all_bands)
+        self.band_weights = {key: len(all_bands)/bin_counts[key]/6 for key in range(6)}
+        print("Found Band Weighting")
+
         self.full_lengths = [len(arr) for arr in tqdm(self.band_array, desc="Getting Lengths")]
         self.max_length = max(self.full_lengths)
 
         if self.t_max == "infer":
             ts = np.array([lc[:, 0].max()-lc[:, 0].min() for lc in tqdm(self.full_light_curve_array, desc="Getting Time Stats")])
-            self.t_max = 2*ts.std() # +/- 1 sigma
+            self.t_max = 2*ts.std()/2 # +/- 1 sigma
             print("Inferred t_max =", self.t_max)
         print("Found Maximum Light Curve Length:", self.max_length)
 
@@ -129,12 +134,14 @@ class LightCurvePreprocessor(Dataset):
 
         # Decide the augmentation mode
         if self.augmentation == "mixed":
-            mode = np.random.choice(["cutoff", "sparse"]) # "cuton", "sparse",
+            mode = np.random.choice(["cutoff", "sparse", "full"]) # "cuton", "sparse",
         else:
             mode = self.augmentation
 
         # Minimum allowed length for any augmented curve
         min_len = max(self.min_points, int(self.min_obs_fraction * n))
+        if min_len == n:
+            mode = "full"
 
         # ------------------------------------------------------------------ #
         # 1) CUTOFF  – keep pre-peak part
@@ -362,6 +369,7 @@ class LightCurvePreprocessor(Dataset):
         }
 
         training_data = {key: self.pad(value, pad_mask) for key, value in training_data.items()}
+        band_weights = np.array([self.band_weights[key] for key in training_data["band_idx_full"]])
 
 
         return {
@@ -385,7 +393,8 @@ class LightCurvePreprocessor(Dataset):
             "augmentation": mode,
             "raw_idx": raw_idx,
             "class_name": class_name,
-            "class_weight": self.class_weights[class_name]
+            "class_weight": self.class_weights[class_name],
+            "band_weight": torch.from_numpy(band_weights)
         }
 
 
@@ -396,11 +405,26 @@ class LightCurvePreprocessor(Dataset):
         (augmentation, flux/time normalization) on the light curve.
         For augmented light curves, return the full light curve as well.
         """
+
         lc_idx, mode, lc_full, band_idx_full, length, class_name = self.get_raw_lightcurve(idx)
         if self.resample:
             lc_full[:, 1] = np.random.normal(loc=lc_full[:, 1], scale=lc_full[:, 2]).astype(lc_full.dtype)
             lc_full[:, 1][lc_full[:, 1] < 0] = 0.0
         lc_part, band_idx_part, aug_idx, mode = self.apply_augmentation(lc_full, band_idx_full, mode)
+        
+        mask_bands = True
+        if mask_bands:
+            if np.random.random() < 0.8:
+                j = np.random.randint(0, 7)
+                mask = band_idx_full == j
+                aug_idx_band = np.where(mask)[0]#[:len(lc_part)]
+                aug_idx_temp = np.sort(np.array(list(set(list(aug_idx)) & set(list(aug_idx_band)))))
+                if len(aug_idx_temp) > self.min_points:
+                    aug_idx = aug_idx_temp
+                    band_idx_part = band_idx_full[aug_idx]
+                    lc_part = lc_full[aug_idx]
+                    
+
         return self.preprocess(idx, lc_full, band_idx_full, length, lc_part, band_idx_part, aug_idx, mode, class_name)
         
 
@@ -468,9 +492,12 @@ def enhanced_collate_fn(batch):
     max_part = max(len(b["x_input"]) for b in batch)
     max_full = max(len(b["time_full"]) for b in batch)
 
-    for i in range(len(batch)):
+    for i in range(len(batch)): # NOTE: A Forward Fill MUST Happen on Masked Points
         b = batch[i]
-        b['x_input'][~b['in_sample_mask'][:, 0]] = b['x_input'][b['in_sample_mask'][:, 0]][-1] # Forward fill
+        b['x_input'] = b['x_input_full'].clone()
+        b['x_input'][~b['pad_mask'][:, 0]] = b['x_input'][b['pad_mask'][:, 0]][-1] # Forward fill
+        #locs = torch.where(~b['in_sample_mask'][:, 0])[0]
+        #b['x_input'][locs] = b['x_input'][locs-1]
     x_input = torch.stack([b["x_input"] for b in batch])
     time = x_input[:, :, 0] # (B, S)
     mask = torch.stack(
@@ -493,9 +520,6 @@ def enhanced_collate_fn(batch):
         ).squeeze(2),
         "pad_mask_full": torch.stack([b["pad_mask"] for b in batch]).squeeze(2),
         "lengths": torch.tensor([b["length"] for b in batch]),
-        #"full_lengths": torch.tensor([b["length"] for b in batch]),
-        #"peak_time": torch.tensor([b["peak_time"] for b in batch]),
-        #"peak_flux": torch.tensor([b["peak_flux"] for b in batch]),
         "flux_norm_info": [b["flux_norm_info"] for b in batch],
         "time_norm_info": [b["time_norm_info"] for b in batch],
         "raw_idx": [b["raw_idx"] for b in batch],
@@ -503,6 +527,7 @@ def enhanced_collate_fn(batch):
         "class_weight": torch.tensor([b["class_weight"] for b in batch]),
         "time_sorted": time_sorted,
         "sequence_batch_mask": sequence_batch_mask,
+        "band_weight": torch.stack([b["band_weight"] for b in batch])
     }
     return coll
 
@@ -560,8 +585,11 @@ class SNDataModule(pl.LightningDataModule):
         )
 
         if self.test_run:
-            self.full_light_curves = self.full_light_curves[:batch_size*100]
-            self.full_class_names = self.full_class_names[:batch_size*100]
+            indices = np.random.choice(len(self.full_light_curves), min(batch_size*50, len(self.full_light_curves)), replace=False)
+            self.full_light_curves = [self.full_light_curves[i] for i in indices]
+            self.full_class_names = [self.full_class_names[i] for i in indices]
+            #self.full_light_curves = self.full_light_curves[:batch_size*120]
+            #self.full_class_names = self.full_class_names[:batch_size*120]
 
     def setup(self, stage=None):
         if self.dataset is None:
@@ -601,7 +629,7 @@ class SNDataModule(pl.LightningDataModule):
             persistent_workers=True,
             prefetch_factor=2,
             drop_last=True,
-            in_order=False,
+            in_order=True,
         )
 
     def val_dataloader(self):
@@ -614,7 +642,7 @@ class SNDataModule(pl.LightningDataModule):
             pin_memory=True,
             persistent_workers=True,
             prefetch_factor=2,
-            drop_last=True,
+            drop_last=False,
         )
 
     def test_dataloader(self):

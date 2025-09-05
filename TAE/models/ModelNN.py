@@ -202,6 +202,47 @@ class MLP(nn.Module):
         sigma = self.std_layer(outputs) + self.epsilon
         return mu, sigma
 
+class LearnedMLPBlock(nn.Module):
+    """Learn and MLP from inputs and apply it to the inputs"""
+
+    def __init__(self, input_dim, output_dim, hidden_dim=None, activation=None, bias=True, norm=True):
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        if hidden_dim is None:
+            self.hidden_dim = output_dim * (input_dim + (1 if self.bias else 0))
+        else:
+            self.hidden_dim = hidden_dim
+        self.activation = activation
+        self.bias = bias
+
+        if self.activation is not None:
+            self.activation = getattr(nn, activation)()
+        else:
+            self.activation = lambda x: x
+        #self.mlp_learner = nn.Linear(input_dim, input_dim * output_dim)
+        self.mlp_learner = ResNet(
+            input_dim, output_dim * (input_dim + (1 if self.bias else 0)), 
+            nlayers=2, nhid=self.hidden_dim, 
+            activation="PReLU",
+            dropout=0.0, norm=norm)
+
+    def forward(self, x):
+        # x: (B, E)
+
+        weights = self.mlp_learner(x).unsqueeze(-1) # (B, ExO, 1)
+        weights = weights.view(*x.shape[:-1], self.output_dim, self.input_dim + (1 if self.bias else 0)) # (B, O, E)
+        if self.bias:
+            bias = weights[..., -1:] # (B, O, 1)
+            weights = weights[..., :-1] # (B, O, E)
+        x = weights @ x[..., None] # (B, O, 1)
+        if self.bias:
+            x = x + bias # (B, O, 1)
+        x = self.activation(x.squeeze(-1)) #(B, O)
+        return x
+
+
 
 class ResNet(nn.Module):
 
@@ -214,6 +255,7 @@ class ResNet(nn.Module):
         activation="Softplus",
         dropout=0.5,
         init="xavier_normal_",
+        norm=False,
     ):
 
         super().__init__()
@@ -226,14 +268,16 @@ class ResNet(nn.Module):
         self.activation_function = getattr(nn, activation)
 
         self.input_layer = nn.Sequential(
-            nn.Linear(ninp, nhid), self.activation_function(), nn.Dropout(p=dropout)
+            nn.Linear(ninp, nhid), *[nn.LayerNorm(nhid) for i in range(1) if norm], self.activation_function(), nn.Dropout(p=dropout)
         )
         self.hidden_layers = nn.ModuleList(
             [
                 nn.Sequential(
                     nn.Linear(nhid, nhid),
+                    *[nn.LayerNorm(nhid) for i in range(1) if norm],
                     self.activation_function(),
                     nn.Dropout(p=dropout),
+                    
                 )
                 for _ in range(nlayers - 1)
             ]

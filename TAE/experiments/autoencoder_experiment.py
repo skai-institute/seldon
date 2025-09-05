@@ -54,13 +54,20 @@ class GRUVAEExperiment(Experiment):
         return {"loss": loss["loss"], "out": out, "batch": batch, 'chi2': loss['squared_error']}
 
     def validation_epoch_end(self, outputs):
+
+        if self.current_epoch == 0:
+            self.best_val = 1e32
         
         result = outputs[0]  # just visualize one batch
         loss_val = result["loss"]
         out = result["out"]
         batch = result["batch"]
 
-        self.log("val_loss", torch.mean(torch.tensor([o['loss'] for o in outputs])), sync_dist=True)
+        val_loss = torch.mean(torch.tensor([o['loss'] for o in outputs]))
+
+        self.log("val_loss", val_loss, sync_dist=True)
+
+
         #return
         if self.metrics is not None:
             metrics = self.metrics(outputs[0])
@@ -71,6 +78,19 @@ class GRUVAEExperiment(Experiment):
                     values = torch.log10(values)
                 if torch.any(torch.isfinite(values)):
                     self.logger.experiment.add_histogram(metric, values, self.current_epoch)
+
+        if self.current_epoch == 30:
+                self.best_val = 1e32
+
+        if val_loss.item() < self.best_val:
+            if self.current_epoch < 10:
+                return
+            else:
+                print("Plotting Validation Batch")
+                self.best_val = val_loss.item()
+            
+        else:
+            return
 
         self.logger.experiment.add_figure('z_proj', plot_latents(outputs[0])['fig'], self.current_epoch)
 

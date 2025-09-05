@@ -4,27 +4,27 @@ dataset:
     lightcurve_path: /u/jackob/skai/data/cleaned_data_8_previous_nondetects_zeroed_merged.pkl
     class_filter: 
       - 'SNIa'        
-    #  - 'SNII'
-    #  - 'SNIb/c'
-    #  - 'SNIax'
-    #  - 'SN91bg'  
+      - 'SNII'
+      - 'SNIb/c'
+      - 'SNIax'
+      - 'SN91bg'  
     flux_normalization: minmax
     time_normalization: minmax
     min_points: 9
-    augmentation: cutoff
+    augmentation: mixed
     num_aug_per_curve: 1
     batch_size: 1024
     num_workers: 8
     test_run: True
     t_max: "infer"
-    resample: False
+    resample: True
     min_obs_fraction: 0.0
 
 model_params:
   name: BandAwareAutoencoder
   config:
-    latent_dim: 64
-    variational: True
+    latent_dim: 8
+    variational: False
     kl_weight: 0.001
     loss: "Huber"
     is_adversarial: False
@@ -38,23 +38,28 @@ model_params:
       config:
         input_dim: 2
         hidden_dim: 64
-        dropout: 0.0
+        dropout: 0.05
+        nlayers: 2
+        BAND_EMB_DIM: 6
+        pooling: "all"
+        norm: True
+        #t_max: 10.0
+        #N_points: 250
     decoder: 
-      name: "GaussianBasisDecoder"
+      name: "SigmoidBasisDecoder"
       config:
-        latent_dim: 64
+        latent_dim: 8
         hidden: 64
-        BAND_EMB_DIM: 16
+        BAND_EMB_DIM: 6
         num_basis: 16
-        dropout: 0.2
+        dropout: 0.05
         activation: "GELU"
         decoupled: True
+        nlayers: 2
         decouple_dim: 
-          - 8
-          - 8
+          - 1
+          - 1
         band_dot_prod: True
-
-
 
 exp_params:
   name: GRUVAEExperiment
@@ -77,6 +82,7 @@ exp_params:
     # dataset will be filled by the fill_config function
 
 trainer_params:
+  max_epochs: 3000
   max_epochs: 30
   accelerator: "auto"
   devices: 1

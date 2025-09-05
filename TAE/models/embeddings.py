@@ -2,6 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 class LinearTimeEmbedding(nn.Module):
     # https://arxiv.org/html/2409.20092v1
@@ -18,7 +19,53 @@ class LinearTimeEmbedding(nn.Module):
         return self.transform(t)
 
 
+class PlotterEmbedding(nn.Module):
+    '''Turn a time-series into a plot image with a learned manifold transformation'''
 
+
+    def __init__(self, N_width=100, N_height=100, gamma=1.0, output_dim=64, device=None):
+        super().__init__()
+
+        self.N_width = N_width
+        self.N_height = N_height
+        self.gamma = gamma # Gaussian Width
+        self.output_dim = output_dim
+
+        self.time_sigmoid = nn.Sigmoid()
+        self.flux_sigmoid = nn.Sigmoid()
+
+        self.XX = None
+        self.YY = None
+
+        self.out = nn.Linear(self.N_height*6, self.output_dim)
+        #self.squeeze = nn.Linear(6, 1)
+        
+
+
+    def forward(self, t, f, band_idx, mask=None):
+
+
+        if self.XX is None:
+            self.XX, self.YY = torch.meshgrid(
+                torch.arange(t.shape[1], device=t.device, dtype=torch.float32), 
+                torch.arange(self.N_height, device=t.device, dtype=torch.float32), 
+                indexing='ij'
+                ) # (h, w)
+
+        t_map = (self.time_sigmoid(t)-0.5)*2*t.shape[1]# (B, S)
+        f_map = self.flux_sigmoid(f)*self.N_height # (B, S)
+        if mask is not None:
+            f_map[~mask] = -10.0 * self.gamma
+            t_map[~mask] = -10.0 * self.gamma
+        XX = self.XX[None, :].expand(t.shape[0], -1, -1) # (B, w, h)
+        YY = self.YY[None, :].expand(t.shape[0], -1, -1) # (B, w, h)
+        grid = 1/(np.sqrt(2*np.pi*self.gamma))*torch.exp(-((YY-f_map[..., None])**2 + (XX-t_map[..., None])**2)/(2*self.gamma**2))
+        grid = grid[..., None].expand(t.shape[0], -1, -1, 6) # (B, S, h, E)
+        band_map = F.one_hot(band_idx, num_classes=6)[:, :, None, :].expand(*grid.shape)
+        grid = grid.clone()*band_map
+        #grid = self.squeeze(grid).squeeze(3) # (B, S, h)
+        emb = self.out(grid.flatten(2)) #(B, S, E)
+        return emb
 
 class PositionalEncoding(nn.Module):
     r"""Inject some information about the relative or absolute position of the tokens in the sequence.
