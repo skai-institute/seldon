@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
-from TAE.util import log_to_linear
+from TAE.util import log_to_linear, sigma_log_to_linear
 
 BAND_IDX_MAP = {"g":0, "r":1, "i":2, "z":3, "y":4, "u":5}
 

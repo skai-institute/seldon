@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from TAE.models.ModelNN import ResNet
+from TAE.models.ModelNN import ResNet, SimpleHyperMLP
 from TAE.util import register_module
 import torch.nn.functional as F
 from torchdiffeq import odeint_adjoint as odeint
@@ -21,9 +21,11 @@ class ODESolver(nn.Module):
         #self.step_size_controller = tode.FixedStepController()
         self.step_size_controller = tode.PIDController(
             atol=1.0, rtol=1.0, pcoeff=0.2, icoeff=0.5, 
-            dcoeff=0.0, term=self.term, dt_max=0.5, dt_min=-0.5
+            dcoeff=0.0, term=self.term, dt_max=0.5, dt_min=-0.0
         )
-        self.solver = tode.AutoDiffAdjoint(self.step_method, self.step_size_controller)
+        self.solver = tode.AutoDiffAdjoint(self.step_method, 
+                                           self.step_size_controller, 
+                                           backprop_through_step_size_control=True)
         #self.solver = tode.BacksolveAdjoint(self.term, self.step_method, self.step_size_controller)
         #self.jit_solver = torch.compile(self.solver)
 
@@ -54,12 +56,61 @@ class ODEDecoder(nn.Module):
 
         ts, h_p = self.integrator(hx, time.expand(hx.shape[0], -1))
         return ts, h_p
+    
+@register_module
+class HyperODESolver(nn.Module):
+
+    def __init__(self, hidden_size, hyper_hidden_dim, num_layers=3, activation="Softplus", dt=0.0, batch_first=True, device=None):
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.device=device
+        self.dt = dt
+        self.batch_first = batch_first
+        self.hyper_hidden_dim = hyper_hidden_dim
+        self.num_layers = num_layers
+
+        self.mlp = SimpleHyperMLP(input_dim=hidden_size, 
+                                  output_dim=hidden_size, 
+                                  hidden_dim=hidden_size,
+                                  hyper_hidden_dim=hyper_hidden_dim,
+                                  activation=activation, 
+                                  input_dim_cond=1,
+                                  num_layers=num_layers)
+        
+    def forward(self, hx, time):
+        # time: (B, S)
+        # hx: (B, E)
+        #import sys
+        #print(time.shape, hx.shape, file=sys.stderr)
+        dt = (time[:, 1:] - time[:, :-1])[..., None] # (B, S*, 1), S* is number of time points minus 1
+        _, sequence_length, _ = dt.shape
+        #print(dt.shape, sequence_length, file=sys.stderr)
+        output = [hx]
+        h_t_minus_1 = hx
+        for i in range(sequence_length):
+            hx = h_t_minus_1 + self.mlp(h_t_minus_1, dt[:, i]) # dt[:, i] is (B, 1)
+            output.append(hx)
+            h_t_minus_1 = hx
+        solution = torch.stack(output).transpose(0, 1) # The first output value should always be the input (B, S, E)
+        #print(solution.shape, file=sys.stderr)
+        return time, solution
 
 
 @register_module
 class RNNODEEncoder(nn.Module):
     
-    def __init__(self, hidden_size, bias=True, device=None, dtype=None, dt=0.0001, batch_first=False, dropout=0.0, nlayers=4, norm=True):
+    def __init__(self, hidden_size, 
+                 bias=True, 
+                 device=None, 
+                 dtype=None, 
+                 dt=0.0001, 
+                 batch_first=False, 
+                 dropout=0.0, 
+                 nlayers=4, 
+                 norm=True,
+                 activation='Softplus',
+                 use_hyper_integrator=False):
 
         super().__init__()
 
@@ -70,10 +121,26 @@ class RNNODEEncoder(nn.Module):
         self.dt = dt
         self.batch_first = batch_first
         self.dropout = dropout
+        self.activation = activation
+        self.use_hyper_integrator = use_hyper_integrator
 
         self.rnn_cell = nn.GRUCell(hidden_size, hidden_size, bias=bias, device=device, dtype=dtype)
-        self.ode_net = ODEFunc(hidden_size, hidden_size, nhid=hidden_size, nlayers=nlayers, dropout=dropout, norm=norm)
-        self.integrator = ODESolver(self.ode_net)
+        if self.use_hyper_integrator:
+            self.integrator = HyperODESolver(hidden_size=hidden_size, 
+                                             hyper_hidden_dim=4,
+                                             device=device, 
+                                             activation=activation,
+                                             num_layers=nlayers+1)
+        else:
+            self.ode_net = ODEFunc(hidden_size, 
+                                hidden_size, 
+                                nhid=hidden_size, 
+                                nlayers=nlayers, 
+                                dropout=dropout, 
+                                norm=norm,
+                                activation=activation,
+                                bias=bias)
+            self.integrator = ODESolver(self.ode_net)
         #self.integrator = odeint
 
     def forward(self, x, time, mask, time_sorted=None, sequence_batch_mask=None, hx=None):
@@ -99,8 +166,9 @@ class RNNODEEncoder(nn.Module):
         for t in range(1, seq_len):
             t0 = time[seq_len-t] # (B)
             t1 = time[seq_len-t-1] # (B)
-            ts = torch.stack([t0, t1-self.dt*(t1==t0)]).t().contiguous().detach() # (B, 2) # USE THE t1==t0 MASK!
-            h_p = self.integrator(h_t_minus_1, ts)[1][:, -1] #* mask[seq_len-t][:, None] # (B, 2), when t1 == t0 this gives nans!
+            time_mask = (t1 == t0)
+            ts = torch.stack([t0, t1-self.dt*time_mask]).t().contiguous()#.detach() # (B, 2) # USE THE t1==t0 MASK!
+            h_p = self.integrator(h_t_minus_1, ts)[1][:, -1]*~time_mask[:, None] + h_t_minus_1 * time_mask[:, None]#* mask[seq_len-t][:, None] # (B, 2), when t1 == t0 this gives nans!
             #assert torch.all(torch.isfinite(h_p)), ts
             total_mask = mask[seq_len-t-1][:, None]
             h_t = self.rnn_cell(x[seq_len-t-1], h_p) * total_mask + (~total_mask) * h_p #h_t_minus_1, # NOTE: THIS IS THE CHANGE
@@ -113,113 +181,7 @@ class RNNODEEncoder(nn.Module):
         #    output = output.transpose(0, 1)
         return None, h_t
         #return output, h_t
-
-
-    def forward_s(self, x, time, mask, time_sorted, sequence_batch_mask, hx=None):
-        # x is (S, B, E) where E is input_size
-        # time is (S, B)
-        # Want (S, B) iteration, mask updates at t = batch[time], pre-sort time
-        if self.batch_first:
-            x = x.transpose(0, 1)
-            time = time.transpose(0, 1)
-            mask = mask.transpose(0, 1)
-            sequence_batch_mask = sequence_batch_mask.transpose(1, 2) # (T, S, B)
-        #seq_len, batch_size, _ = x.size()
-        t_len, seq_len, batch_size = sequence_batch_mask.size()
-        
-        #print("sorting")
-        #time_sorted = torch.sort(torch.unique(torch.ravel(time[mask])), dim=0, descending=True)[0] # Sequence First
-        #print("sorted")
-        if hx is None:
-            hx = torch.zeros(batch_size, self.hidden_size, device=x.device)
-        h_t_minus_1 = hx
-        #time = torch.cat((time, time[-1:]), dim=0) # repeat first time entry
-        #mask = torch.cat((mask, mask[-1:]), dim=0) # To make sure we mask both times
-        h_t = hx
-        h_p = hx.clone()
-        output = []
-        #print("Integrating")
-        for i in range(t_len - 1):
-            #print(i)
-            t1 = time_sorted[i+1]
-            t0 = time_sorted[i]
-            time_mask = sequence_batch_mask[i] # (S, B)
-            update_mask = torch.any((time >= t0) & mask, dim=0) # Locations where the batch sample has a time earlier than t0
-            time_mask_across_sequence = torch.any(time_mask, dim=0) # (B,) Any batch sample that contains the time
-            #time_mask_across_batch = torch.any(time_mask, dim=1) # (S,) Any sequence element containing a batch with a time
-            #print(h_p.shape, update_mask.shape, h_t_minus_1[layer].shape)
-            #ts = torch.stack([t0, t1])
-            n_points = max(2, int(torch.floor((t0 - t1)/self.dt)))
-            ts = torch.linspace(t0, t1, n_points, device=x.device)
-            #print(ts.shape, ts)
-            #h_p[update_mask] = self.integrator(self.ode_net, h_t_minus_1[update_mask], t0, t1) # Update all batches at this time
-            h_p[update_mask] = self.integrator(self.ode_net, h_t_minus_1[update_mask], ts, atol=1e-3, rtol=1e-5, method='rk4')[1]
-            h_p[~update_mask] = 0.0
-
-            # Note: Should really only update positions where t > t0 
-
-            x_t = x[time_mask] # (S_t & B_t, E)
-
-            # Think about updating individual h_t componenets and only running rnn on those componenets
-            h_t[time_mask_across_sequence] = self.rnn_cell(x_t, h_p[time_mask_across_sequence]) # Update all batches at this time at their sequence locations
-            h_t[~time_mask_across_sequence] = h_p[~time_mask_across_sequence] # Otherwise update with previous integration step
-            output.append(h_t)
-            h_t_minus_1 = h_t
-        output = torch.stack(output)
-        #print("integrated", time_sorted.shape[0]-1, "steps")
-        if self.batch_first:
-            output = output.transpose(0, 1)
-        return output, h_t
-    
-
-    def forward__(self, x, time, mask, hx=None):
-        return
-        # x is (S, B, E) where E is input_size
-        # time is (S, B)
-        # Want (S, B) iteration, mask updates at t = batch[time], pre-sort time
-        if self.batch_first:
-            x = x.transpose(0, 1)
-            time = time.transpose(0, 1)
-            mask = mask.transpose(0, 1)
-        seq_len, batch_size, _ = x.size()
-
-        time_sorted, time_index = torch.sort(torch.ravel(time), dim=0, descending=True) # union of all times decending
-        mask_sorted = torch.ravel(mask)[time_index] # Masks at each loction
-        time_index = time_index[mask_sorted] # Mask out the time index
-        time_sorted = time_sorted[mask_sorted] # mask out the times
-        idx2S = time_index // batch_size # Sequence number at each time point
-        idx2B = time_index % batch_size # batch number at each time point
-        
-        if hx is None:
-            hx = torch.zeros(batch_size, self.hidden_size, device=x.device)
-        h_t_minus_1 = hx
-        #time = torch.cat((time, time[-1:]), dim=0) # repeat first time entry
-        #mask = torch.cat((mask, mask[-1:]), dim=0) # To make sure we mask both times
-        h_t = hx
-        #x = x[::-1] # reversed time-series encoding
-        #time = time[::-1] # reversed time-series encoding
-        output = []
-        for i in range(time_sorted.shape[0]-1):
-            t1 = time_sorted[i+1]
-            t0 = time_sorted[i]
-            x_t = x[idx2S[i+1]] # (B, E)
-            mask_t = F.one_hot(idx2B[i+1], num_classes=batch_size)
-    
-
-            h_p = self.integrator(self.ode_net, h_t_minus_1, t0, t1) # Update everything across all batches
-            #h_t[idx2B[i+1]] = self.rnn_cell(x_t[idx2B[i+1]], h_t[idx2B[i+1]])
-            h_rnn = self.rnn_cell(x_t, h_p)
-            h_t = h_rnn * mask_t[:, None] + (1 - mask_t[:, None]) * h_p
-
-            output.append(h_t)
-            h_t_minus_1 = h_t
-            #print(h_t)
-        output = torch.stack(output)
-        if self.batch_first:
-            output = output.transpose(0, 1)
-        return output, h_t
-    
-
+   
 
 class ODEFunc(nn.Module):
 

@@ -220,6 +220,7 @@ class ConvEncoder(BaseEncoder):
 NUM_BANDS = 6  # keep the same constants you use elsewhere
 BAND_EMB_DIM = 2
 
+
 @register_module
 class RecurrentODEEncoder(nn.Module):
     """
@@ -227,7 +228,24 @@ class RecurrentODEEncoder(nn.Module):
     Encodes [time, normalized flux] sequences into latent vector z.
     """
 
-    def __init__(self, input_dim=3, hidden_dim=128, dropout=0.0, BAND_EMB_DIM=2, NUM_BANDS=6, t_max=2.0, N_points=50, nlayers=4, pooling="mean", norm=True):
+    def __init__(self, 
+                 input_dim=3, 
+                 hidden_dim=128, 
+                 dropout=0.0, 
+                 BAND_EMB_DIM=2, 
+                 NUM_BANDS=6, 
+                 t_max=2.0, 
+                 N_points=50, 
+                 nlayers=4, 
+                 pooling="mean", 
+                 norm=True,
+                 aggregate_with_deepsets=True,
+                 activation_ode='Softplus',
+                 activation_deepsets='PReLU',
+                 embed_flux_error=False,
+                 embed_meta_data=False,
+                 bias=True,
+                 use_hyper_integrator=False):
         """
         Args:
             input_dim: number of input features (e.g., time + normalized flux + dummy 1)
@@ -242,32 +260,62 @@ class RecurrentODEEncoder(nn.Module):
         self.t_max = t_max
         self.N_points = N_points
         self.nlayers = nlayers
+        self.activation_ode = activation_ode
+        self.activation_deepsets = activation_deepsets
+        self.aggregate_with_deepsets = aggregate_with_deepsets
+        self.embed_flux_error = embed_flux_error
+        self.embed_meta_data = embed_meta_data
+        self.use_hyper_integrator = use_hyper_integrator
+
+        if embed_meta_data and not embed_flux_error:
+            import sys
+            print("WARNING: embed_meta_data is True but embed_flux_error is False, will not perform any embedding")
 
         self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM, scale_grad_by_freq=False)
-        self.float_embedding = FPEmbedding(1, input_dim)
+        emb_inputs = input_dim + BAND_EMB_DIM
+        if self.embed_meta_data:
+            self.detection_embedding = nn.Embedding(2, 2)
+            emb_inputs += 2
+        if self.embed_flux_error:
+            self.flux_error_embedding = FPEmbedding(1, input_dim)
+            emb_inputs += input_dim
+        
+        self.flux_embedding = FPEmbedding(1, input_dim)
         self.rnn = RNNODEEncoder(
             hidden_dim,
             batch_first=True,
-            bias=True,
+            bias=bias,
             nlayers=nlayers,
-            norm=norm
+            norm=norm,
+            activation=activation_ode,
+            use_hyper_integrator=use_hyper_integrator
         )
         #self.rnn = torch.compile(self.rnn)
 
-        self.linear_layer = nn.Linear(input_dim + BAND_EMB_DIM, hidden_dim)
+        self.linear_layer = nn.Linear(emb_inputs, hidden_dim)
 
         #additional tests
-        self.to_latent_timeseries = ODEDecoder(hidden_size=hidden_dim, activation='Softplus', batch_first=True)
-        self.to_latent_timeseries.integrator = self.rnn.integrator
+        
         #self.to_latent_timeseries = torch.compile(self.to_latent_timeseries)
         #self.deepset = SimpleDeepSet(hidden_dim, hidden_dim, activation='PReLU', dropout=dropout)
         # Want to include times
-        self.deepset = SimpleDeepSet(hidden_dim+1, hidden_dim, activation='PReLU', dropout=dropout, pooling=pooling)
+        if self.aggregate_with_deepsets:
+            self.to_latent_timeseries = ODEDecoder(hidden_size=hidden_dim, activation=activation_ode, batch_first=True)
+            self.to_latent_timeseries.integrator = self.rnn.integrator
+            self.deepset = SimpleDeepSet(hidden_dim+1, 
+                                        hidden_dim, 
+                                        activation=activation_deepsets, 
+                                        dropout=dropout, 
+                                        pooling=pooling,
+                                        norm=norm)
         self.t_grid = None
         #self.fc_mean = nn.Linear(hidden_dim, latent_dim)
         #self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
+        self.time_scaling = nn.Parameter(torch.randn(1), requires_grad=True) # Let the network determine the dt
+        self.softplus = nn.Softplus()
 
-        self.compile(mode='max-autotune-no-cudagraphs')
+        if not self.use_hyper_integrator:
+            self.compile(mode='max-autotune-no-cudagraphs')
 
 
     def forward(self, x, band_idx, mask, time_sorted=None, sequence_batch_mask=None):
@@ -281,7 +329,7 @@ class RecurrentODEEncoder(nn.Module):
             z_logvar: log-variance of latent distribution (B, latent_dim)
         """
         if self.t_grid is None:
-            self.t_grid = torch.linspace(0.0, self.t_max, self.N_points, device=x.device).detach() # (S)
+            self.t_grid = torch.linspace(0.0, self.t_max, self.N_points, device=x.device)#.detach() # (S)
 
         '''
         t = x[..., 0]
@@ -293,25 +341,43 @@ class RecurrentODEEncoder(nn.Module):
         #################
         e_b = self.band_emb(band_idx.squeeze(2))
         t = x[..., 0]
+        t_scale = self.softplus(self.time_scaling)
+        t = t * t_scale
+
         f = x[..., 1:2]
-        f_emb = self.float_embedding(f)
-        x = f_emb
-        x = torch.cat([x, e_b], dim=-1)
+        emb = self.flux_embedding(f) # 
+
+        if self.embed_flux_error:
+            f = x[..., 2:3]
+            e_e = self.flux_error_embedding(f)
+            emb = torch.cat([emb, e_e], dim=-1)
+
+        if self.embed_meta_data:
+            d = x[..., 3].to(torch.int32)
+            e_d = self.detection_embedding(d)
+            emb = torch.cat([emb, e_d], dim=-1)
+
+        x = torch.cat([emb, e_b], dim=-1)
         x = self.linear_layer(x)
         #x[~mask] = 0.0
-        x = x.masked_fill_(~mask.unsqueeze(-1), 0.0)
+        #x_old = x
+        #x = x.masked_fill_(~mask.unsqueeze(-1), 0.0) #Should validate that unfilled gives back the same embedding
         #################
         
 
         _, h_n = self.rnn(x, t, mask, time_sorted, sequence_batch_mask)  # h_n: (B, hidden_dim)
+        #_, h_n2 = self.rnn(x_old, t, mask, time_sorted, sequence_batch_mask)
+        #assert (h_n == h_n2).all(), f"Outputs Don't Match!: {h_n},{h_n2}"
         #h_n = h_n.squeeze(0)  # (B, hidden_dim)
         #return h_n
 
-        _, zs = self.to_latent_timeseries(self.t_grid, h_n) # (B, S, E)
-        # concat the time points!
-        zs = torch.cat((zs, self.t_grid.expand(zs.shape[0], -1)[:, :, None]), dim=-1)
-        z = self.deepset(zs) # (B, H)
-        return z
+        if self.aggregate_with_deepsets:
+            _, zs = self.to_latent_timeseries(t_scale*self.t_grid, h_n) # (B, S, E)
+            # concat the time points!
+            zs = torch.cat((zs, t_scale*self.t_grid.expand(zs.shape[0], -1)[:, :, None]), dim=-1)
+            z = self.deepset(zs) # (B, H)
+            return z
+        return h_n
 
 
 @register_module

@@ -35,6 +35,8 @@ class GRUVAEExperiment(Experiment):
     def training_step(self, batch, batch_idx):
         results = self.model.training_step(batch, batch_idx)
         self.log("train_loss", results["loss"], sync_dist=True)
+        self.log("train_recon", results['reconstruction_loss'], sync_dist=True)
+        self.log("train_kl", results['kl_divergence'], sync_dist=True)
         return results
 
     def validation_step(self, batch, batch_idx):
@@ -50,8 +52,14 @@ class GRUVAEExperiment(Experiment):
         )
         
         loss = self.model.loss_function(out, batch)
+        self.log("val_loss", loss['loss'], sync_dist=True)
+        self.log("val_recon", loss['reconstruction_loss'], sync_dist=True)
+        self.log("val_kl", loss['kl_divergence'], sync_dist=True)
 
-        return {"loss": loss["loss"], "out": out, "batch": batch, 'chi2': loss['squared_error']}
+
+        return {"loss": loss["loss"], "out": out, "batch": batch, 
+                'chi2': loss['squared_error'], "reconstruction_loss":loss["reconstruction_loss"],
+                "kl_divergence":loss['kl_divergence']}
 
     def validation_epoch_end(self, outputs):
 
@@ -64,9 +72,11 @@ class GRUVAEExperiment(Experiment):
         batch = result["batch"]
 
         val_loss = torch.mean(torch.tensor([o['loss'] for o in outputs]))
-
+        val_recon = torch.mean(torch.tensor([o['reconstruction_loss'] for o in outputs]))
+        val_kl = torch.mean(torch.tensor([o['kl_divergence'] for o in outputs]))
         self.log("val_loss", val_loss, sync_dist=True)
-
+        self.log("val_recon", val_recon, sync_dist=True)
+        self.log("val_kl", val_kl, sync_dist=True)
 
         #return
         if self.metrics is not None:
@@ -77,6 +87,7 @@ class GRUVAEExperiment(Experiment):
                 if 'Max' in metric or "FE" in metric:
                     values = torch.log10(values)
                 if torch.any(torch.isfinite(values)):
+                    values = values[torch.isfinite(values)]
                     self.logger.experiment.add_histogram(metric, values, self.current_epoch)
 
         if self.current_epoch == 30:
@@ -92,7 +103,7 @@ class GRUVAEExperiment(Experiment):
         else:
             return
 
-        self.logger.experiment.add_figure('z_proj', plot_latents(outputs[0])['fig'], self.current_epoch)
+        self.logger.experiment.add_figure('z_proj', plot_latents(outputs[0], color_by="class_weight")['fig'], self.current_epoch)
 
         sqrt_num_axes = min(int(np.sqrt(len(outputs))), 2) # Only plot 4 samples because plots get huge
         for name in ("Best", "Worst", "Median", "Static"):

@@ -89,21 +89,43 @@ class Adam:
         self,
         LR,
         weight_decay=0,
-        scheduler_gamma=None,
+        encoder_scale_factor=1,
+        reduce_on_plateau=False,
     ):
         self.lr = LR
         self.weight_decay = weight_decay
-        self.scheduler_gamma = scheduler_gamma
+        self.encoder_scale_factor = encoder_scale_factor
+        self.reduce_on_plateau = reduce_on_plateau
 
     def __call__(self, model):
         optims = []
-        optims = optim.Adam(
-            model.parameters(),
-            lr=self.lr,
-            weight_decay=self.weight_decay,
-        )
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optims, cooldown=5, factor=0.5)
-        return [optims], [{"scheduler": scheduler, "interval": "epoch", "monitor": "train_loss"}]
+        if self.encoder_scale_factor == 1:
+            optims = optim.Adam(
+                model.parameters(),
+                lr=self.lr,
+                weight_decay=self.weight_decay,
+            )
+        elif self.encoder_scale_factor != 1:
+            encoder_parameters = [p for p in model.encoder.parameters()]
+            encoder_parameter_ids = [id(p) for p in encoder_parameters]
+            other_parameters = [p for p in model.parameters() if id(p) not in encoder_parameter_ids]
+            optims = optim.Adam(
+                [
+                    {"params":other_parameters, "lr":self.lr},
+                    {"params":encoder_parameters, "lr":self.lr*self.encoder_scale_factor}
+                ],
+                weight_decay=self.weight_decay,
+            )
+
+        
+        if self.reduce_on_plateau:
+            #scheduler = optim.lr_scheduler.ExponentialLR(optims, gamma=0.98)
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optims, cooldown=2, factor=0.2)
+            return [optims], [{"scheduler": scheduler, "interval": "epoch", "monitor": "val_loss"}]
+        return optims
+
+        #scheduler = optim.lr_scheduler.ReduceLROnPlateau(optims, cooldown=5, factor=0.5)
+        #return [optims], [{"scheduler": scheduler, "interval": "epoch", "monitor": "train_loss"}]
         # if self.scheduler_gamma is not None:
         #     scheduler = optim.lr_scheduler.ExponentialLR(
         #         optims[0], gamma=self.scheduler_gamma

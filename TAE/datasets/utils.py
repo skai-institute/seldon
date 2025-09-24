@@ -2,6 +2,9 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 import torch
 
+# Mapping of band names to integer codes
+BAND_IDX_MAP = {"g": 0, "r": 1, "i": 2, "z": 3, "y": 4, "u": 5}
+
 def _to_list(x):
     if x is None:
         return []

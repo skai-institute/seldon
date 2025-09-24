@@ -3,9 +3,24 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.nn.parameter import Parameter
-
+from TAE.util import register_module
 
 # TODO: inherit ResNet and DenseNet from MLP.
+
+
+@register_module
+class BatchLookup(nn.Module):
+    '''wrapper to a set of modules and batch indices'''
+
+    def __init__(self, module, *keys):
+
+        super().__init__()
+        self.module = module
+        self.keys = keys
+
+    def forward(self, batch):
+
+        return self.module(*[batch[key] for key in self.keys])
 
 class NormalDistriubtionQuantileMapping(nn.Module):
     '''Takes in a tensor from [-inf, inf], maps to cumulative normal, run through normal disrtibution quantile'''
@@ -51,6 +66,48 @@ class ExponentialDistriubtionQuantileMapping(nn.Module):
         x = self.sigmoid(x).clamp(min=1e-7, max=1-1e-7)
         x = -torch.log(1 - x) / self.softplus(self.lam)
         return x
+
+
+@register_module
+class VariationalComponent(nn.Module):
+
+    def __init__(self, input_dim, output_dim, epsilon=1e-4, variational=True):
+
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.variational = variational
+        self.epsilon = epsilon
+
+        self.fc_mean = nn.Linear(input_dim, output_dim)
+        self.fc_sigma = nn.Sequential(nn.Linear(input_dim, output_dim), nn.Softplus())
+
+    def sample(self, mean, sigma):
+
+        eps = torch.randn_like(sigma)
+        z = mean + eps * sigma
+
+        return z
+
+    def forward(self, x):
+
+        z_mean = self.fc_mean(x)
+        z_sigma = self.fc_sigma(x) + self.epsilon
+
+        if self.variational:
+            z_sample = self.sample(z_mean, z_sigma)
+        else:
+            z_sample = z_mean
+
+        return {"z_mean": z_mean, "z_sigma": z_sigma, "z_var": torch.square(z_sigma), "z_sample": z_sample}
+    
+    def kl_divergence(self, z_mean, z_var):
+
+        if self.variational:
+            return -0.5 * torch.mean(1 + torch.log(z_var) - torch.square(z_mean) - z_var)
+        else:
+            return 0.0
 
 
 
@@ -201,8 +258,140 @@ class MLP(nn.Module):
         mu = self.mean_layer(outputs)
         sigma = self.std_layer(outputs) + self.epsilon
         return mu, sigma
+    
+class HyperMatrix(nn.Module):
+    """Produce k (m x n) matricies and biases"""
 
-class LearnedMLPBlock(nn.Module):
+    def __init__(self, input_dim, m, n, k=1, hidden_dim=None, bias=True, **resnet_kwargs):
+        super().__init__()
+
+        self.input_dim = input_dim # size of the vector that generates the matrix series
+        self.m = m # size of input vector to multiply by
+        self.n = n # "output dim" of the network
+        self.k = k # number of matricies to produce
+
+        self.n_out = n + (1 if self.bias else 0)
+
+        self.output_dim = (m * self.n_out) * k
+
+        self.bias = bias
+
+        if hidden_dim is None:
+            self.hidden_dim = self.output_dim
+        else:
+            self.hidden_dim = hidden_dim
+
+        self.mlp = ResNet(
+            self.input_dim, 
+            self.output_dim, 
+            nhid=self.hidden_dim, 
+            **resnet_kwargs)
+
+    def forward(self, x):
+        # x: (B, m)
+        # weights: k x m x n
+        # bias (optional): k x m x 1
+
+        weights = self.mlp(x).unsqueeze(-1).unsqueeze(-1) # (B, kxmxn_out, 1, 1)
+        weights = weights.view(*x.shape[:-1], self.k, self.m, self.n_out) # (B, k, m, n_out)
+        if self.bias:
+            bias = weights[..., -1:] # (B, O, 1)
+            weights = weights[..., :-1] # (B, O, E)
+            return weights, bias
+        return weights
+
+
+class HyperLinear(nn.Module):
+    """Learn and MLP from inputs and apply it to the inputs"""
+
+    def __init__(self, input_dim, output_dim, hidden_dim=None, input_dim_cond=None, bias=True, **resnet_kwargs):
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.input_dim_cond = input_dim_cond
+        self.bias = bias
+        if input_dim_cond is None:
+            self.input_dim_cond = input_dim
+
+        if hidden_dim is None:
+            self.hidden_dim = output_dim * (input_dim + (1 if self.bias else 0))
+        else:
+            self.hidden_dim = hidden_dim
+
+        self.mlp = ResNet(
+            self.input_dim_cond, 
+            output_dim * (input_dim + (1 if self.bias else 0)), 
+            nhid=self.hidden_dim, 
+            **resnet_kwargs)
+
+    def forward(self, x, cond=None):
+        # x: (B, E)
+        if cond is None:
+            cond = x
+
+        weights = self.mlp(cond).unsqueeze(-1) # (B, ExO, 1)
+        weights = weights.view(*x.shape[:-1], self.output_dim, self.input_dim + (1 if self.bias else 0)) # (B, O, E)
+        if self.bias:
+            bias = weights[..., -1:] # (B, O, 1)
+            weights = weights[..., :-1] # (B, O, E)
+        x = torch.bmm(weights, x[..., None]) # (B, O, 1)
+        if self.bias:
+            x = x + bias # (B, O, 1)
+        x = x.squeeze(-1) #(B, O)
+        return x
+    
+@register_module
+class SimpleHyperMLP(nn.Module):
+
+    def __init__(self, 
+                 input_dim, 
+                 output_dim, 
+                 hidden_dim, 
+                 hyper_hidden_dim=128,
+                 input_dim_cond=None, 
+                 num_layers=2, 
+                 activation="Softplus", 
+                 bias=True):
+
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.num_layers = num_layers
+        self.activation = getattr(nn, activation)
+        self.bias = bias
+        self.hidden_dim = hidden_dim
+        self.hyper_hidden_dim = hyper_hidden_dim
+
+        self.hyper_mlp = []
+        for i in range(num_layers):
+            self.hyper_mlp.append(
+                nn.ModuleList([
+                    HyperLinear(
+                        input_dim=input_dim if i == 0 else hidden_dim,
+                        output_dim=output_dim if i == num_layers-1 else hidden_dim,
+                        input_dim_cond=input_dim_cond,
+                        bias=bias,
+                        hidden_dim=hyper_hidden_dim,
+                        nlayers=4
+                        ),
+                        *[self.activation() for i in range(1) if i+1 < num_layers],
+                    ])
+            )
+        
+        self.hyper_mlp = nn.ModuleList(self.hyper_mlp)
+
+    def forward(self, x, cond=None):
+
+        for block in self.hyper_mlp:
+            x = block[0](x, cond)
+            if len(block) == 2:
+                x = block[1](x)
+        return x
+    
+
+class HyperMLPBlock(nn.Module):
     """Learn and MLP from inputs and apply it to the inputs"""
 
     def __init__(self, input_dim, output_dim, hidden_dim=None, activation=None, bias=True, norm=True):
@@ -228,7 +417,7 @@ class LearnedMLPBlock(nn.Module):
             activation="PReLU",
             dropout=0.0, norm=norm)
 
-    def forward(self, x):
+    def forward(self, x, cond):
         # x: (B, E)
 
         weights = self.mlp_learner(x).unsqueeze(-1) # (B, ExO, 1)
@@ -236,13 +425,33 @@ class LearnedMLPBlock(nn.Module):
         if self.bias:
             bias = weights[..., -1:] # (B, O, 1)
             weights = weights[..., :-1] # (B, O, E)
-        x = weights @ x[..., None] # (B, O, 1)
+        x = torch.bmm(weights, x[..., None]) # (B, O, 1)
         if self.bias:
             x = x + bias # (B, O, 1)
         x = self.activation(x.squeeze(-1)) #(B, O)
         return x
 
+@register_module
+class SlidingBasisSuppression(nn.Module):
+    """learnable vector of basis activations
+    to control the number of basis functions 
+    through a sliding offset on a HardTanh"""
 
+    def __init__(self, num_basis):
+        super().__init__()
+
+        self.num_basis = num_basis
+
+        self.controller = nn.Parameter(torch.zeros(1, 1, 1, requires_grad=True), requires_grad=True)
+        slider = torch.arange(num_basis, requires_grad=False)[None, None, :]
+        self.register_buffer("slider", slider)
+
+        self.activation = nn.Hardtanh(min_val=0.0, max_val=1.0)
+        self.scaler = nn.Sigmoid()
+
+    def forward(self):
+
+        return self.activation((self.num_basis)*(self.scaler(self.controller) - 1) + self.slider + 1)
 
 class ResNet(nn.Module):
 
@@ -256,6 +465,7 @@ class ResNet(nn.Module):
         dropout=0.5,
         init="xavier_normal_",
         norm=False,
+        bias=True
     ):
 
         super().__init__()
@@ -264,16 +474,17 @@ class ResNet(nn.Module):
         self.noutp = noutp
         self.nlayers = nlayers
         self.nhid = nhid
+        self.bias = bias
 
         self.activation_function = getattr(nn, activation)
 
         self.input_layer = nn.Sequential(
-            nn.Linear(ninp, nhid), *[nn.LayerNorm(nhid) for i in range(1) if norm], self.activation_function(), nn.Dropout(p=dropout)
+            nn.Linear(ninp, nhid, bias=bias), *[nn.LayerNorm(nhid) for i in range(1) if norm], self.activation_function(), nn.Dropout(p=dropout)
         )
         self.hidden_layers = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(nhid, nhid),
+                    nn.Linear(nhid, nhid, bias=bias),
                     *[nn.LayerNorm(nhid) for i in range(1) if norm],
                     self.activation_function(),
                     nn.Dropout(p=dropout),
@@ -283,7 +494,7 @@ class ResNet(nn.Module):
             ]
         )
         self.output_layer = nn.Sequential(
-            nn.Linear(nhid, noutp),
+            nn.Linear(nhid, noutp, bias=bias),
         )
 
         #self.init_weights()

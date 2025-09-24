@@ -14,6 +14,8 @@ from TAE.models.autoencoders import Autoencoder, BandAwareAutoencoder, StudentGR
 from TAE.util import registry
 from TAE.models.ModelNN import ResNet
 from TAE.models.neuralode import RNNODEEncoder
+from TAE.models.loss import *
+from TAE.models.embeddings import *
 
 # from TAE.experiments.autoencoder_experiment import Experiment, AutoencoderExperiment
 

@@ -30,22 +30,26 @@ def plot_latents(output,
     """
     Perform dimensionality reduction on latent vectors and plot colored by per-curve loss.
     """
+    if isinstance(color_by, str):
+        assert color_by in {"mse", "class_weight"}
     assert method in {"pca", "umap"}
-    assert color_by in {"mse"}
     assert loss_scale in {"linear", "log", "log10", "sqrt"}
 
     out = output['out']
     z = out['z_mean'].detach().cpu().numpy()
     loss = output['chi2'].detach().cpu().numpy()
 
-    if loss_scale == "linear":
-        loss_np = loss
-    elif loss_scale == "log":
-        loss_np = np.log(loss + 1e-6)
-    elif loss_scale == "log10":
-        loss_np = np.log10(loss + 1e-6)
-    elif loss_scale == "sqrt":
-        loss_np = np.sqrt(loss+ 1e-6)
+    if color_by == "mse":
+        if loss_scale == "linear":
+            loss_np = loss
+        elif loss_scale == "log":
+            loss_np = np.log(loss + 1e-6)
+        elif loss_scale == "log10":
+            loss_np = np.log10(loss + 1e-6)
+        elif loss_scale == "sqrt":
+            loss_np = np.sqrt(loss+ 1e-6)
+    else:
+        loss_np = output['batch'][color_by].detach().cpu().numpy()
 
     # Dimensionality reduction
     if method == "pca":
@@ -60,7 +64,7 @@ def plot_latents(output,
     sc = ax.scatter(Z_proj[:, 0], Z_proj[:, 1],
                     c=loss_np, cmap="viridis_r", norm=norm,
                     s=8, alpha=.8, edgecolors="none")
-    fig.colorbar(sc, ax=ax, label=f"Per-curve MSE ({loss_scale})")
+    fig.colorbar(sc, ax=ax, label=f"Per-curve {color_by} ({loss_scale})")
 
     # Label selection
     if label_mode == "color_threshold":

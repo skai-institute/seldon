@@ -12,6 +12,7 @@ from .encoders import GRUEncoder
 from .decoders import MLPBandDecoder
 from .parametric_decoders import BazinDecoder
 from TAE.util import register_module
+from TAE.models.ModelNN import VariationalComponent
 
 
 
@@ -20,7 +21,8 @@ def init_weights(m):
     if isinstance(m, nn.Linear):
         nn.init.xavier_normal_(m.weight)
         if hasattr(m, "bias"):
-            m.bias.data.fill_(0.01)
+            if m.bias is not None:
+                m.bias.data.fill_(0.01)
 
 
 @dataclass
@@ -92,11 +94,12 @@ class BandAwareAutoencoder(nn.Module):
         variational=True,
         encoder="GRUEncoder",
         decoder="MLP",
+        embedder=None,
         loss='mse',
         is_adversarial: bool=False,
         adv_alpha: float = 0.9,
         adv_epsilon: float = 0.0005,
-        batch_ode: bool=False,
+        variational_epsilon: float = 1e-4,
         **kwargs
     ):
         
@@ -111,32 +114,34 @@ class BandAwareAutoencoder(nn.Module):
         self.is_adversarial = is_adversarial
         self.adv_alpha = adv_alpha
         self.adv_epsilon = adv_epsilon
-        self.batch_ode = batch_ode
-
-        if loss == 'NLL':
-            self.recon_loss = MaskedGaussianNLL()
-        elif loss == 'mse':
-            self.recon_loss = MaskedMSELoss()
-        elif loss == "Huber":
-            self.recon_loss = MaskedHuberLoss()
-        else:
-            raise ValueError(f"argument `loss` must be one of ('NLL', 'mse', 'Huber') but got '{self.loss}'")
-        self.encoder = encoder
-        #self.encoder = GRUEncoder(input_dim, hidden_dim, latent_dim)
-        # self.decoder = MLPBandDecoder(latent_dim, )  # hidden_dim inside decoder is default (128)
-
-        self.decoder = decoder
+        self.variational_epsilon = variational_epsilon
         self.variational = variational
+        if len(kwargs):
+            import sys
+            print(f"WARNING: extra keyword arguments provided but not used\n{kwargs}", file=sys.stderr)
 
-        self.fc_mean = nn.Linear(encoder.hidden_dim, latent_dim)
-        self.fc_logvar = nn.Linear(encoder.hidden_dim, latent_dim)
+        if isinstance(loss, str):
+            if loss == 'NLL':
+                self.recon_loss = MaskedGaussianNLL()
+            elif loss == 'mse':
+                self.recon_loss = MaskedMSELoss()
+            elif loss == "Huber":
+                self.recon_loss = MaskedHuberLoss()
+            else:
+                raise ValueError(f"argument `loss` must be one of ('NLL', 'mse', 'Huber') but got '{self.loss}'")
+        else:
+            self.recon_loss = loss
 
-        #if decoder == "MLP":
-        #    self.decoder = MLPBandDecoder(latent_dim, **kwargs)
-        #elif decoder == "Bazin":
-        #    self.decoder = BazinDecoder(latent_dim, **kwargs)
-        #else:
-        #    raise NameError("Decoder must be MLP or Bazin.")
+        self.encoder = encoder
+        self.decoder = decoder
+        self.embedder = embedder
+        
+
+        self.variational_component = VariationalComponent(
+            encoder.hidden_dim, 
+            latent_dim, 
+            variational=variational,
+            epsilon=self.variational_epsilon)
 
         self.kl_weight = kl_weight
         self.out_sample_lambda = out_sample_lambda
@@ -158,26 +163,23 @@ class BandAwareAutoencoder(nn.Module):
         Returns:
             dict with 'reconstructed', 'z_mean', 'z_logvar'
         """
-        #z, z_mean, z_logvar = self.encoder(x, band_idx_part)
-        if self.batch_ode:
-            memory = self.encoder(x, band_idx_part, mask, time_sorted, sequence_batch_mask)
-        else:
-            memory = self.encoder(x, band_idx_part, mask)
-        z_mean = self.fc_mean(memory)
-        z_logvar = torch.clamp(self.fc_logvar(memory), min=-10.0, max=2.0)
+        memory = self.encoder(x, band_idx_part, mask)
 
-        if self.variational:
-            if self.training:
-                std = torch.exp(0.5 * z_logvar)
-                eps = torch.randn_like(std)
-                z = z_mean + eps * std
-            else:
-                z = z_mean
-        else:
-            z = z_mean
+        latent_components = self.variational_component(memory)
+        z_mean = latent_components['z_mean']
+        z = latent_components['z_sample']
+        z_var = latent_components['z_var']
+        z_sigma = latent_components['z_sigma']
+
         reconstructed = self.decoder(z, t, band_idx_full)
 
-        return {"reconstructed": reconstructed, "z_mean": z_mean, "z_logvar": z_logvar, 'z_sample': z}
+        return {"reconstructed": reconstructed, "z_mean": z_mean, "z_var": z_var, 'z_sample': z, "z_sigma": z_sigma}
+
+    def embed(self, batch):
+
+        with torch.no_grad():
+            embedding = self.embedder(batch)
+            return embedding
 
     def encode(self, x, band_idx, mask=None):
         """
@@ -185,7 +187,8 @@ class BandAwareAutoencoder(nn.Module):
         """
         with torch.no_grad():
             z = self.encoder(x, band_idx, mask)
-            z = self.fc_mean(z)
+            latent_components = self.variational_component(z)
+            z = latent_components['z_mean']
             return z
 
     def decode(self, z, t, band_idx):
@@ -195,39 +198,24 @@ class BandAwareAutoencoder(nn.Module):
         with torch.no_grad():
             return self.decoder(z, t, band_idx)
 
-    #def loss_function(self, recon, target, time, mask, z_mean, z_logvar):
     def loss_function(self, out, batch):
         """
         Compute total loss = in-sample MSE + (out-of-sample MSE) + KL divergence + smoothness penalty.
         """
-        recon=out["reconstructed"]
-        target=batch["flux_full"]
-        time=batch["time_full"]
-        mask=batch["in_sample_mask"]
-        pad_mask=batch["pad_mask_full"].unsqueeze(-1)
+
         z_mean=out["z_mean"]
-        z_logvar=out["z_logvar"]
-        sigma = batch["flux_err_full"]
+        z_var=out["z_var"]
         weight = batch["class_weight"]
 
         reconstruction_loss = self.recon_loss(out, batch)
-
-        #in_loss = 0.5*(squared_error * mask).sum()
-        #out_loss = 0.5*(
-        #    (squared_error * (~mask) * pad_mask).sum()
-        #)
-        if self.variational:
-            kl = -0.5 * torch.mean(1 + z_logvar - z_mean.pow(2) - z_logvar.exp())
-        else:
-            kl = 0
+        kl = self.variational_component.kl_divergence(z_mean, z_var)
 
         total_loss = (
             torch.mean(reconstruction_loss*weight) + self.kl_weight * kl
-        )  # +
-        #   self.smooth_weight * smooth_penalty
-        # )
+        )
 
-        return {"loss": total_loss, 'squared_error': reconstruction_loss}
+        return {"loss": total_loss, 'squared_error': reconstruction_loss, 
+                'kl_divergence': kl, "reconstruction_loss":torch.mean(reconstruction_loss*weight)}
 
     def training_step(self, batch, batch_idx):
 
@@ -271,7 +259,6 @@ class BandAwareAutoencoder(nn.Module):
             )
 
             loss = self.loss_function(out, batch)
-            #print(loss['loss'])
 
 
         if self.is_adversarial:
@@ -279,7 +266,6 @@ class BandAwareAutoencoder(nn.Module):
             batch_adv = {}
             batch_adv.update(batch)
             
-            # Do a cut-off augmentation
             batch_adv['flux_full'] = out['reconstructed'].clone()
 
             dt = torch.clamp(torch.sign(delta_t.grad.data)*torch.exp(torch.randn(1)[0])*self.adv_epsilon, max=0.5, min=-0.5)
@@ -309,7 +295,6 @@ class BandAwareAutoencoder(nn.Module):
             loss_adv = self.loss_function(out_adv, batch_adv)
 
             loss['loss'] = self.adv_alpha * loss['loss'] + (1 - self.adv_alpha) * loss_adv['loss']
-            #batch.update(batch_adv)
 
         return loss
 

@@ -3,7 +3,7 @@ import torch.nn as nn
 from TAE.util import register_module
 from typing import Union
 import torch.nn.functional as F
-from TAE.models.ModelNN import ResNet, BinaryGELU, LearnedMLPBlock
+from TAE.models.ModelNN import ResNet
 from TAE.models.embeddings import LinearTimeEmbedding, FPEmbedding
 
 NUM_BANDS = 6  # keep the same constants you use elsewhere
@@ -93,20 +93,25 @@ class SimpleDeepSet(nn.Module):
         pooling: str = "sum",
         dropout: float = 0.2,
         activation: str = "PReLU",
+        norm:bool = False,
     ):
         super().__init__()
-        if pooling not in {"mean", "sum", "max", "all"}:
-            raise ValueError("pooling must be one of {'mean', 'sum', 'max', 'all'}")
+        if pooling not in {"mean", "sum", "max", "all", "attentive"}:
+            raise ValueError("pooling must be one of {'mean', 'sum', 'max', 'all', 'attentive'}")
         
         self.hidden_dim = hidden_dim
         self.dropout = dropout
         self.activation = getattr(nn, activation)
         self.phi_out = self.activation()
-        self.phi = ResNet(input_dim, hidden_dim, nlayers=2, nhid=hidden_dim, activation=activation, dropout=dropout)
-        self.rho = ResNet(hidden_dim, hidden_dim, nlayers=2, nhid=hidden_dim, activation=activation, dropout=dropout)
+        self.phi = ResNet(input_dim, hidden_dim, nlayers=2, nhid=hidden_dim, activation=activation, dropout=dropout, norm=norm)
+        self.rho = ResNet(hidden_dim, hidden_dim, nlayers=2, nhid=hidden_dim, activation=activation, dropout=dropout, norm=norm)
         self.pooling = pooling  # commutative aggregation
         if self.pooling == "all":
             self.transform_shapes = nn.Linear(hidden_dim*4, hidden_dim)
+        elif self.pooling == "attentive":
+            self.W = nn.Linear(hidden_dim, hidden_dim)
+            self.v = nn.Linear(hidden_dim, 1, bias=False)
+            self.tanh = nn.Tanh()
 
         #self.out_final = nn.Sequential(
         #    LearnedMLPBlock(hidden_dim, hidden_dim, hidden_dim=None, activation=activation),
@@ -130,6 +135,11 @@ class SimpleDeepSet(nn.Module):
             return torch.min(h, dim=1)[0]
         elif self.pooling == "all":
             return self.transform_shapes(torch.cat([h.mean(dim=1), h.sum(dim=1), torch.max(h, dim=1)[0], torch.min(h, dim=1)[0]], dim=1))
+        elif self.pooling == "attentive":
+            score = self.v(self.tanh(self.W(h))) # (B, S, 1)
+            weights = F.softmax(score, dim=1) # (B, S, 1)
+            pooling = (weights * h).sum(dim=1) # (B, E)
+            return pooling
 
         # mean (default) – optionally masked    
         masked = h * mask.unsqueeze(-1)

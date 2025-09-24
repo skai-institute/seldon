@@ -35,14 +35,17 @@ def plot_full_multiband_dense_plot(model, batch, idx, device, ax=None, dense_pts
     time = batch["time_full"][idx].detach().cpu().numpy()[:length, 0]
     band = batch["band_idx_full"][idx].detach().cpu().numpy()[:length, 0]
     sample_mask = batch["in_sample_mask"][idx].detach().cpu().numpy()[:length]
+    class_name = batch['class_name'][idx]
     t_max = np.max(np.abs(time)) * 1.2
     t_min = -t_max
     t_dense = torch.linspace(t_min, t_max, dense_pts)
     if batch['flux_norm_info'][idx][2] == 'minmax':
         flux += 0.5
         flux *= batch['flux_norm_info'][idx][-1]
+        flux_err *= batch['flux_norm_info'][idx][-1]
     elif batch['flux_norm_info'][idx][2] == 'max_partial_scalar':
         flux *=  batch['flux_norm_info'][idx][-1]
+        flux_err *= batch['flux_norm_info'][idx][-1]
     flux = log_to_linear(flux)
     flux_err = sigma_log_to_linear(flux_err, flux)
     for j in range(6):
@@ -95,7 +98,8 @@ def plot_full_multiband_dense_plot(model, batch, idx, device, ax=None, dense_pts
             alpha=0.5
         )
         
-        plt.plot(t_dense, reconstruction, label="Prediction", color=BAND_COL[j])
+        plt.plot(t_dense, reconstruction, color=BAND_COL[j])
+    plt.gca().set_title(f'Reconstruction of {class_name}')
     plt.legend(ncol=2)
     plt.xlabel("Scaled Time")
     plt.ylabel("Scaled Flux")

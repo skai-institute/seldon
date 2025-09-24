@@ -5,7 +5,7 @@ from TAE.util import register_module
 import torch
 from TAE.models.ModelNN import ResNet
 from torch.nn import functional as F
-from TAE.models.ModelNN import ExponentialDistriubtionQuantileMapping, NormalDistriubtionQuantileMapping
+from TAE.models.ModelNN import ExponentialDistriubtionQuantileMapping, NormalDistriubtionQuantileMapping, SlidingBasisSuppression
 import typing
 
 @register_module
@@ -24,6 +24,9 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
         dropout: float = 0.0,
         decouple_dim: typing.Optional[typing.Union[typing.List, int, None]] = None,
         band_dot_prod: bool = False,
+        norm: bool = False,
+        rescale_decoupled_network: bool = False,
+        sed_mode: bool = False
     ):
         super().__init__()
         if isinstance(decouple_dim, list):
@@ -35,6 +38,8 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
         self.band_dot_prod = band_dot_prod
         self.inp_dim = 0
         self.nlayers = nlayers
+        self.rescale_decoupled_network = rescale_decoupled_network
+        self.sed_mode = sed_mode
 
         # Do some checks on the parameters
         if isinstance(self.decouple_dim, list):
@@ -54,7 +59,9 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 activation=activation,
                 dropout=dropout,
                 band_dot_prod=band_dot_prod,
-                nlayers=self.nlayers)
+                nlayers=self.nlayers,
+                norm=norm,
+                sed_mode=sed_mode,)
         elif isinstance(self.decouple_dim, int):
             self.first_decoder = None
             self.inp_dim = self.decouple_dim
@@ -69,14 +76,23 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 dropout=dropout,
                 decouple_dim=self.decouple_dim,
                 band_dot_prod=band_dot_prod,
-                nlayers=self.nlayers)
+                nlayers=self.nlayers,
+                norm=norm,
+                rescale_decoupled_network=rescale_decoupled_network,
+                sed_mode=sed_mode)
         
         else:
-            print(self.decouple_dim)
             self.inp_dim = self.decouple_dim[0]+self.decouple_dim[1]# gives back 2 decoupled slices on the first dim
+            if rescale_decoupled_network:
+                d_hidden_dim = int(hidden * np.sqrt(self.inp_dim / latent)) # Make this go as sqrt?  
+                c_hidden_dim = int(hidden * np.sqrt((latent - self.inp_dim) / latent))
+                assert d_hidden_dim > 0, f"Rescaled decoupled dimension is too small! latent:{latent}, decouple_dim:{self.inp_dim}, hidden_dim:{hidden}"
+            else:
+                d_hidden_dim = hidden
+                c_hidden_dim = hidden
             self.first_decoder = DecoupledBandParametricDecoder( 
                 latent=self.inp_dim,
-                hidden=hidden,
+                hidden=d_hidden_dim,
                 K=K,
                 NUM_BANDS=NUM_BANDS,
                 BAND_EMB_DIM=BAND_EMB_DIM,
@@ -85,10 +101,13 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 dropout=dropout,
                 decouple_dim=self.decouple_dim[0],
                 band_dot_prod=band_dot_prod,
-                nlayers=self.nlayers)
+                nlayers=self.nlayers,
+                norm=norm,
+                rescale_decoupled_network=rescale_decoupled_network,
+                sed_mode=sed_mode)
             self.decoder = GeneralizedDecoupledBandParametricDecoder(
                 latent=latent - self.inp_dim,
-                hidden=hidden,
+                hidden=c_hidden_dim,
                 K=K,
                 NUM_BANDS=NUM_BANDS,
                 BAND_EMB_DIM=BAND_EMB_DIM,
@@ -97,7 +116,10 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 dropout=dropout,
                 decouple_dim=self.decouple_dim[2:],
                 band_dot_prod=band_dot_prod,
-                nlayers=self.nlayers
+                nlayers=self.nlayers,
+                norm=norm,
+                rescale_decoupled_network=rescale_decoupled_network,
+                sed_mode=sed_mode
             )
 
     def forward(self, z, t, band_idx):
@@ -126,15 +148,28 @@ class DecoupledBandParametricDecoder(nn.Module): # TODO: Generalize this (amp in
         decouple_dim: int = 1,
         nlayers=4,
         band_dot_prod: bool = False,
+        norm: bool = False,
+        rescale_decoupled_network: bool = False,
+        sed_mode: bool = False,
     ):
         super().__init__()
         self.decouple_dim = decouple_dim
         self.band_dot_prod = band_dot_prod
         self.nlayers = nlayers
+        self.rescale_decoupled_network = rescale_decoupled_network
+        self.sed_mode = sed_mode
+
+        if rescale_decoupled_network:
+            d_hidden_dim = int(hidden * np.sqrt(self.decouple_dim / latent)) # Make this go as sqrt or linear space?  
+            c_hidden_dim = int(hidden * np.sqrt((latent - self.decouple_dim) / latent))
+            assert d_hidden_dim > 0, f"Rescaled decoupled dimension is too small! latent:{latent}, decouple_dim:{self.decouple_dim}, hidden_dim:{hidden}"
+        else:
+            d_hidden_dim = hidden
+            c_hidden_dim = hidden
 
         self.to_time = BandParametricDecoder(
             latent=self.decouple_dim,
-            hidden=hidden,
+            hidden=d_hidden_dim,
             K=K,
             NUM_BANDS=NUM_BANDS,
             BAND_EMB_DIM=BAND_EMB_DIM,
@@ -142,10 +177,12 @@ class DecoupledBandParametricDecoder(nn.Module): # TODO: Generalize this (amp in
             activation=activation,
             dropout=dropout,
             band_dot_prod=band_dot_prod,
-            nlayers=self.nlayers)
+            nlayers=self.nlayers,
+            norm=norm,
+            sed_mode=sed_mode)
         self.to_params = BandParametricDecoder(
             latent=latent-self.decouple_dim,
-            hidden=hidden,
+            hidden=c_hidden_dim,
             K=K,
             NUM_BANDS=NUM_BANDS,
             BAND_EMB_DIM=BAND_EMB_DIM,
@@ -153,7 +190,9 @@ class DecoupledBandParametricDecoder(nn.Module): # TODO: Generalize this (amp in
             activation=activation,
             dropout=dropout,
             band_dot_prod=band_dot_prod,
-            nlayers=self.nlayers
+            nlayers=self.nlayers,
+            norm=norm,
+            sed_mode=sed_mode
         )
 
     def forward(self, z, t, band_idx):
@@ -178,6 +217,8 @@ class BandParametricDecoder(nn.Module):
         dropout: float = 0.0,
         nlayers=4,
         band_dot_prod = False,
+        norm: bool = False,
+        sed_mode: bool = False
     ):
         super().__init__()
         self.K = K
@@ -188,35 +229,32 @@ class BandParametricDecoder(nn.Module):
         self.dropout = dropout
         self.band_dot_prod = band_dot_prod
         self.nlayers=nlayers
+        self.sed_mode = sed_mode
+        if self.sed_mode and self.band_dot_prod:
+            import sys
+            print("WARNING: both `sed_mode` and `band_dot_prod` are true.  Will only use SED mode", file=sys.stderr)
         if self.BAND_EMB_DIM > 0:
             self.band_emb = nn.Embedding(self.NUM_BANDS, self.BAND_EMB_DIM, scale_grad_by_freq=False)
 
-        if self.band_dot_prod:
+        if self.band_dot_prod or self.sed_mode:
             assert self.BAND_EMB_DIM > 0, "Cannot perform a dot product without a band embedding"
             inp = latent # multiply and sum z @ e_b
-            self.mlp = ResNet(inp, BAND_EMB_DIM * self.DF * K, nlayers=self.nlayers, nhid=hidden, activation=activation, dropout=dropout)
+            self.mlp = ResNet(inp, BAND_EMB_DIM * self.DF * K, nlayers=self.nlayers, nhid=hidden, activation=activation, dropout=dropout, norm=norm)
         else:
             inp = latent + BAND_EMB_DIM  # concat z‖e_b
-            self.mlp = ResNet(inp, NUM_BANDS * self.DF * K, nlayers=self.nlayers, nhid=hidden, activation=activation, dropout=dropout)
-        #self.mlp = nn.Sequential(
-        #    nn.Linear(inp, hidden),
-        #    self.activation(),
-        #    nn.Dropout(dropout),
-        #    nn.Linear(hidden, hidden),
-        #    self.activation(),
-        #    nn.Dropout(dropout),
-        #    nn.Linear(hidden, NUM_BANDS * self.DF * K),  # [a|c|s] for all bases
-        #)
+            self.mlp = ResNet(inp, NUM_BANDS * self.DF * K, nlayers=self.nlayers, nhid=hidden, activation=activation, dropout=dropout, norm=norm)
+ 
 
     def forward(self, z, t, band_idx):  # t:(B,T,1)
 
         #z = z.unsqueeze(1).expand(z.shape[0], band_idx.shape[1], z.shape[1]) # (B, S, E)
         if self.BAND_EMB_DIM > 0:
-            z = z.unsqueeze(1).expand(z.shape[0], band_idx.shape[1], z.shape[1]) # (B, S, E), maybe do this after mlp
+            z = z#.unsqueeze(1).expand(z.shape[0], band_idx.shape[1], z.shape[1]) # (B, S, E), maybe do this after mlp
             e_b = self.band_emb(band_idx[:, :, 0])  # (B,seq,E)
-            if not self.band_dot_prod:
+            if not self.band_dot_prod and not self.sed_mode:
                 z = torch.cat([z, e_b], dim=-1)
             params = self.mlp(z) # (B, 3K) # Should be (B, band, 3k), apply same mlp for each E in the sequnce (clones)
+            params = params.unsqueeze(1).expand(params.shape[0], band_idx.shape[1], params.shape[1])
         else:
             if not self.band_dot_prod:
                 params = self.mlp(z).unsqueeze(1).expand(z.shape[0], band_idx.shape[1], -1)
@@ -226,7 +264,7 @@ class BandParametricDecoder(nn.Module):
         # import pdb; pdb.set_trace()
         #params = self.mlp(z) # (B, 3K) # Should be (B, band, 3k)
         
-        if not self.band_dot_prod:
+        if not self.band_dot_prod and not self.sed_mode:
             params = params.view(
                 params.shape[0], params.shape[1], self.NUM_BANDS, self.DF * self.K
             )  # (B,band,3K)
@@ -238,12 +276,18 @@ class BandParametricDecoder(nn.Module):
                 .view(params.shape[0], -1, self.K, self.DF)
             )  # (B, K, 3)
         else:
-            e_b = e_b.unsqueeze(-1).expand(-1, -1, -1, self.DF * self.K) # (b, S, E, DF x K)
-            params = params.view(
-                params.shape[0], params.shape[1], self.BAND_EMB_DIM, self.DF * self.K
-            )  # (B, S ,E , DF x K)
-            params = (params * e_b).sum(2) # (B, S, DF x K)
-            params = params.view(params.shape[0], -1, self.K, self.DF) # (B, S, K, 3)
+            if not self.sed_mode:
+                e_b = e_b.unsqueeze(-1).expand(-1, -1, -1, self.DF * self.K) # (B, S, E, DF x K)
+                params = params.view(
+                    params.shape[0], params.shape[1], self.BAND_EMB_DIM, self.DF * self.K
+                )  # (B, S ,E , DF x K)
+                params = (params * e_b).sum(2) # (B, S, DF x K)
+                params = params.view(params.shape[0], -1, self.K, self.DF) # (B, S, K, 3)
+            else:
+                params = params.view(
+                    params.shape[0], params.shape[1], self.BAND_EMB_DIM, self.K, self.DF
+                ) # (B, S, E, K, DF)
+
 
         return params  # (B, S, K, DF)
 
@@ -328,13 +372,27 @@ class GaussianBasisDecoder(nn.Module):
         activation="GELU", dropout=0.0, 
         decoupled=False, decouple_dim=1,
         band_dot_prod=False,
-        nlayers=4
+        nlayers=4,
+        logscale_output=True,
+        norm=False,
+        suppress_higher_terms=False,
+        rescale_decoupled_network: bool = False,
+        sed_mode: bool = False,
+        accumulate: bool = False
     ):
         super().__init__()
         self.band_dot_prod = band_dot_prod
         self.num_basis = num_basis
         self.multiple_decouple = isinstance(decouple_dim, list)
         self.nlayers=nlayers
+        self.logscale_output = logscale_output
+        self.suppress_higher_terms = suppress_higher_terms
+        self.sed_mode=sed_mode
+        self.band_emb_dim = BAND_EMB_DIM
+        self.accumulate = accumulate
+        if accumulate:
+            import sys
+            print("WARNING: Parameters Accumulation not Implimeted for Gaussian Decoder", file=sys.stderr)
         DF = 4
         if self.multiple_decouple:
             DF += 1
@@ -351,7 +409,10 @@ class GaussianBasisDecoder(nn.Module):
                 dropout=dropout,
                 decouple_dim=decouple_dim,
                 band_dot_prod=band_dot_prod,
-                nlayers=self.nlayers
+                nlayers=self.nlayers,
+                norm=norm,
+                rescale_decoupled_network=rescale_decoupled_network,
+                sed_mode=sed_mode
             )
         else:
             self.to_params = BandParametricDecoder(
@@ -364,7 +425,9 @@ class GaussianBasisDecoder(nn.Module):
                 activation=activation,
                 dropout=dropout,
                 band_dot_prod=band_dot_prod,
-                nlayers=self.nlayers
+                nlayers=self.nlayers,
+                norm=norm,
+                sed_mode=sed_mode
             )
         self.softplus = nn.Softplus()
         self.exp_map = ExponentialDistriubtionQuantileMapping(init=0.25)
@@ -373,7 +436,13 @@ class GaussianBasisDecoder(nn.Module):
         if self.multiple_decouple:
             self.exp_map_offset = ExponentialDistriubtionQuantileMapping(init=8.0)
             self.normal_map_offset = NormalDistriubtionQuantileMapping(sigma_init=0.1, mu_init=2.0)
-        
+
+        if self.suppress_higher_terms:
+            self.supression_parameters = nn.Parameter(torch.randn(size=(1, 1, num_basis)), requires_grad=True)
+            self.suppressor_activation = nn.Hardtanh(min_val=0.0, max_val=0.0, min_value=0.0, max_value=1.0)
+
+        if self.sed_mode:
+            self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM, scale_grad_by_freq=False)
 
     def forward(
         self,
@@ -404,20 +473,37 @@ class GaussianBasisDecoder(nn.Module):
         mu = mu_raw
 
         # Broadcast time to K bases
-        t_expanded = t.expand(-1, -1, self.num_basis)  # (B, T, K)
+        if self.sed_mode:
+            t_expanded = t[:, :, None, :].expand(-1, -1, self.band_emb_dim, self.num_basis) # (B, T, E, K)
+            e_b = self.band_emb(band_idx[:, :, 0])[..., None]**2
+        else:
+            t_expanded = t.expand(-1, -1, self.num_basis) # (B, T, K)
 
         basis = torch.exp(-(((t_expanded - mu) * sigma).square()).clamp(min=-20.0, max=20.0))
         #weights = w_raw - torch.mean(w_raw, dim=-1, keepdim=True)  # (B, T, K)
         
         #weights = w_raw.square()
+        if self.suppress_higher_terms: # This allows the network to learn exactly how many basis functions to include
+            weights = weights * self.suppressor_activation(self.softplus(self.supression_parameters).cumsum(-1))
+
 
         # Save for optional inspection/debugging
         self.last_basis = basis.detach()
         self.last_weight = weights.detach()
+        self.last_mu = mu.detach()
+        self.last_sigma = sigma.detach()
 
         # Weighted sum of bases → (B, T, 1)
-        out = torch.log(1+torch.mean(weights * basis, dim=-1, keepdim=True)) - 0.5
-        return out
+        f = torch.mean(weights * basis, dim=-1, keepdim=True)
+        if self.sed_mode: # Do a (normalized) dot-product over the SED at each band location
+            f = (e_b * f).sum(dim=-2) / (e_b).sum(dim=-2)
+
+        if self.logscale_output:
+            f = torch.sign(f)*torch.log10(1+torch.absolute(f)) - 0.5
+        else:
+            f = f - 0.5
+
+        return f
 
 @register_module
 class SigmoidBasisDecoder(nn.Module):
@@ -429,11 +515,22 @@ class SigmoidBasisDecoder(nn.Module):
         decoupled=False, decouple_dim=1,
         nlayers=4,
         band_dot_prod=False,
+        logscale_output=True,
+        suppress_higher_terms=False,
+        norm=False,
+        rescale_decoupled_network: bool = False,
+        sed_mode: bool = False,
+        accumulate: bool = False
     ):
         super().__init__()
         self.num_basis = num_basis
         self.band_dot_prod = band_dot_prod
         self.nlayers = nlayers
+        self.logscale_output = logscale_output
+        self.suppress_higher_terms = suppress_higher_terms
+        self.sed_mode = sed_mode
+        self.band_emb_dim = BAND_EMB_DIM
+        self.accumulate = accumulate
         # DF = 3 → (w_raw, μ_raw, log σ)
         self.multiple_decouple = isinstance(decouple_dim, list)
         DF = 4
@@ -450,7 +547,10 @@ class SigmoidBasisDecoder(nn.Module):
                 activation=activation,
                 dropout=dropout,
                 decouple_dim=decouple_dim,
-                band_dot_prod=band_dot_prod
+                band_dot_prod=band_dot_prod,
+                norm=norm,
+                rescale_decoupled_network=rescale_decoupled_network,
+                sed_mode=sed_mode
             )
         else:
             self.to_params = BandParametricDecoder(
@@ -462,9 +562,21 @@ class SigmoidBasisDecoder(nn.Module):
                 DF=DF,
                 activation=activation,
                 dropout=dropout,
-                band_dot_prod=band_dot_prod
+                band_dot_prod=band_dot_prod,
+                norm=norm,
+                sed_mode=sed_mode
             )
         self.softplus = nn.Softplus()
+        self.sigmoid = nn.Sigmoid()
+
+        if self.suppress_higher_terms:
+            self.supression_parameters = nn.Parameter(torch.randn(size=(1, 1, num_basis)), requires_grad=True)
+            self.suppressor_activation = nn.Hardtanh(min_val=0.0, max_val=1.0)
+            #self.suppressor = SlidingBasisSuppression(num_basis=num_basis)
+
+        if self.sed_mode:
+            self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM, scale_grad_by_freq=False)
+            self.softmax = nn.Softmax(dim=-1)
 
     # --------------------------------------------------------------------- #
     def forward(self, z: torch.Tensor, t: torch.Tensor, band_idx: torch.Tensor):
@@ -483,38 +595,54 @@ class SigmoidBasisDecoder(nn.Module):
         params = self.to_params(z, t, band_idx)
         if self.multiple_decouple:
             mu_offset, w_offset, w_raw, mu_raw, log_sigma = params.unbind(-1)
-            w_raw = w_raw + w_offset - torch.mean(w_raw, dim=-1, keepdim=True)
+            w_offset = torch.mean(self.softplus(w_offset), dim=-1, keepdim=True)
+            if self.accumulate:
+                w_raw = w_raw.cumsum(-1)
+            w_raw = self.sigmoid(w_raw)  # Set global scale
+            w_raw = w_raw - torch.mean(w_raw, dim=-1, keepdim=True) # zero-mean
+            w_raw = w_raw * w_offset
         else:
             mu_offset, mu_raw, w_raw, log_sigma = params.unbind(-1)  # each (B, T, K)
-        #mu_offset, mu_raw, w_raw, log_sigma = params.unbind(-1)  # each (B, T, K)
+
         mu_offset = torch.mean(mu_offset, dim=-1, keepdim=True)
+        if self.accumulate:
+            mu_raw = mu_raw.cumsum(-1)
         mu_raw = mu_raw + mu_offset - torch.mean(mu_raw, dim=-1, keepdim=True)
 
-        # Centre positions lie in [0, t_max] per light curve
-        #t_max = t.max(dim=1, keepdim=True).values  # (B,1,1)
         mu = mu_raw
-        #mu = mu_raw.clone() #) * 2 - 1# * 2*t_max - t_max  # (B, T, K)
-        #mu[:, :, 1:] = self.softplus(mu_raw[:, :, 1:]) # Cumulative summing the offsets to turn them into deltas
-        #mu = torch.cumsum(mu, dim=2)
+        weights = w_raw
 
-        sigma = self.softplus(log_sigma) #+ 1e-4  # positive, (B, T, K)
-        #sigma = log_sigma
-        #sigma = torch.exp(log_sigma.clamp(max=20.0))
-
-        mu     = mu_raw
         sigma  = self.softplus(log_sigma) + 1e-4
-        t_expanded = t.expand(-1, -1, self.num_basis)
+        if self.sed_mode:
+            t_expanded = t[:, :, None, :].expand(-1, -1, self.band_emb_dim, self.num_basis) # (B, T, E, K)
+            e_b = self.softmax(self.band_emb(band_idx[:, :, 0]))[..., None] #** 2
+        else:
+            t_expanded = t.expand(-1, -1, self.num_basis) # (B, T, K)
         basis = torch.sigmoid((t_expanded - mu) * sigma)  # (B, T, K)
-        weights = w_raw - torch.mean(w_raw, dim=-1, keepdim=True)  # (B, T, K)
+
+        if self.suppress_higher_terms: # This allows the network to learn how many basis functions to include
+            weights = weights * self.suppressor_activation(self.softplus(self.supression_parameters).cumsum(-1))
+            #weights = weights * self.suppressor()
 
         # Save for optional inspection/debugging
         self.last_basis = basis.detach()
         self.last_weight = weights.detach()
+        self.last_mu = mu.detach()
+        self.last_sigma = sigma.detach()
 
         # Weighted sum of bases → (B, T, 1)
         f = torch.mean(weights * basis, dim=-1, keepdim=True)
-        out = torch.sign(f)*torch.log(1 + torch.abs(f)) - 0.5
-        return out
+
+        if self.sed_mode: # Do a (normalized) dot-product over the SED at each band location
+            f = (e_b * f).sum(dim=2) / (e_b).sum(dim=2)
+
+        if self.logscale_output:
+            f = torch.sign(f)*torch.log10(1+torch.absolute(f)) - 0.5
+        else:
+            f = f - 0.5
+
+        return f
+
 
 
 @register_module

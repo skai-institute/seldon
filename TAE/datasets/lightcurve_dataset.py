@@ -11,6 +11,7 @@ from torch.utils.data import Dataset
 import torch
 from enum import Enum
 from TAE.util import fill_config, extract_curves_from_filtered_data
+from multiprocessing import Process, Manager
 
 
 # Mapping of band names to integer codes
@@ -529,6 +530,9 @@ def enhanced_collate_fn(batch):
         "sequence_batch_mask": sequence_batch_mask,
         "band_weight": torch.stack([b["band_weight"] for b in batch])
     }
+    if batch[0]['meta_data'] is not None:
+        coll.update(
+            {'detection_flag': torch.stack([b["meta_data"][:, 0] for b in batch])})
     return coll
 
 
@@ -580,9 +584,14 @@ class SNDataModule(pl.LightningDataModule):
         with open(lightcurve_path, "rb") as f:
             filtered_data = pickle.load(f)
 
-        self.full_light_curves, self.full_class_names = extract_curves_from_filtered_data(
+        self.manager = Manager()
+        full_light_curves, full_class_names = extract_curves_from_filtered_data(
             filtered_data, min_points=min_points, class_filter=class_filter
         )
+        self.full_light_curves = self.manager.list()
+        self.full_class_names = self.manager.list()
+        self.full_light_curves.extend(full_light_curves)
+        self.full_class_names.extend(full_class_names)
 
         if self.test_run:
             indices = np.random.choice(len(self.full_light_curves), min(batch_size*50, len(self.full_light_curves)), replace=False)
@@ -593,6 +602,8 @@ class SNDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         if self.dataset is None:
+            manager = Manager()
+            
             self.dataset = LightCurvePreprocessor(
                 self.full_light_curves,
                 self.full_class_names,

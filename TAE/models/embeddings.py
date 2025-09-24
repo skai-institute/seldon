@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from TAE.util import register_module
 
 class LinearTimeEmbedding(nn.Module):
     # https://arxiv.org/html/2409.20092v1
@@ -17,6 +18,78 @@ class LinearTimeEmbedding(nn.Module):
     def forward(self, t):
 
         return self.transform(t)
+    
+@register_module
+class BatchEmbedding(nn.Module):
+
+    def __init__(self, output_dim=None, **embedding_config): # Could make this just take kwargs
+        super().__init__()
+
+        self.embedding_keys = embedding_config.keys()
+        self.embedders = embedding_config.values()
+        self.output_dim = output_dim
+        self.to_output = None
+
+    def forward(self, batch):
+
+        embeddings = [embedder(batch[key]) for key, embedder in zip(self.embedding_keys, self.embedders)]
+        embeddings = torch.cat(embeddings, dim=-1)
+
+        if self.to_output is None:
+            if self.output_dim is not None:
+                self.to_output = nn.Linear(embeddings.shape[-1], self.output_dim)
+            else:
+                return embeddings
+        return self.to_output(embeddings)
+    
+class OneHotEmbedding(nn.Module):
+
+    def __init__(self, num_classes=-1):
+        super().__init__()
+
+        self.num_classes = num_classes
+
+    def forward(self, x):
+
+        return F.one_hot(x, num_classes=self.num_classes)
+
+@register_module
+class ConfigurableEmbedding(BatchEmbedding):
+
+    def __init__(self, 
+                 output_dim=None,
+                 embed_bands=True,
+                 embed_flux=True, 
+                 embed_flux_errors=True,
+                 embed_non_detections=True,
+                 num_bands=6,
+                 band_emb_dim=6,
+                 flux_emb_dim=6,
+                 flux_error_emb_dim=6,
+                 non_detection_emb_dim=6,
+                 ):
+        
+        embedders = [
+            FPEmbedding(1, flux_emb_dim),
+            FPEmbedding(1, flux_error_emb_dim),
+            nn.Embedding(num_bands, band_emb_dim),
+            nn.Embedding(2, non_detection_emb_dim)
+            ]
+        embedding_keys=["flux_full", "flux_error_full", "band_idx", "detection_flag"]
+
+        embedding_config = dict(zip(embedding_keys, embedders))
+        if not embed_bands:
+            del embedding_config['band_idx']
+        if not embed_flux:
+            del embedding_config['flux_full']
+        if not embed_flux_errors:
+            del embedding_config['flux_error_full']
+        if not embed_non_detections:
+            del embedding_config['detection_flag']
+        
+        super().__init__(output_dim=output_dim, **embedding_config)
+
+
 
 
 class PlotterEmbedding(nn.Module):

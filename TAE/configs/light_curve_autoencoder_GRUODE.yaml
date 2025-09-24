@@ -1,65 +1,92 @@
 dataset:
-  name: SNDataModuleParquet
+  name: LightCurveDataLoader
   config:
-    lightcurve_path: /u/jackob/skai/data/cleaned_data_8_previous_nondetects_zeroed_merged.pkl
+    lightcurve_path: /projects/ncsa/caps/skai/data/ELAsTiCC/complete.parquet
     class_filter: 
       - 'SNIa'        
       - 'SNII'
-      - 'SNIb/c'
-      - 'SNIax'
-      - 'SN91bg'  
+    #  - 'SNIb/c'
+    #  - 'SNIax'
+    #  - 'SN91bg'
+    #  - 'SLSN'
     flux_normalization: minmax
-    time_normalization: minmax
-    min_points: 9
-    augmentation: mixed
-    num_aug_per_curve: 1
+    time_normalization: std
+    min_points: 10
+    max_points: 200
+    augmentations: 
+      - CutOffSample
+      - BandSample
+      - SparseSample
+      - CutOnSample
+      - FullSample
     batch_size: 1024
-    num_workers: 8
-    test_run: True
+    num_workers: 16
+    mode: parquet
+    #test_run: False
     t_max: "infer"
     resample: True
-    min_obs_fraction: 0.0
+    include_non_detections: True
+    include_meta_data: True
+    t_offset: -0.5
+    #min_obs_fraction: 0.0
 
 model_params:
   name: BandAwareAutoencoder
   config:
-    latent_dim: 8
-    variational: False
-    kl_weight: 0.001
-    loss: "Huber"
+    latent_dim: 6
+    variational: True
+    kl_weight: 0.0001
+    loss: 
+      name: MaskedHuberLoss
+      config:
+        weight_bands: True 
+        weight_classes: True 
+        inverse_transform: True
+        delta: 3.0
+        scale_delta_by: "detection_flag"
     is_adversarial: False
     adv_epsilon: 0.0005
     adv_alpha: 0.8
-    batch_ode: True
-    #num_bands: 6
-    #band_embedding_dim: 4
     encoder:
       name: "RecurrentODEEncoder"
       config:
         input_dim: 2
         hidden_dim: 64
-        dropout: 0.05
+        dropout: 0.01
         nlayers: 2
         BAND_EMB_DIM: 6
-        pooling: "all"
+        pooling: "attentive"
         norm: True
-        #t_max: 10.0
-        #N_points: 250
+        activation_ode: SiLU
+        activation_deepsets: SiLU
+        aggregate_with_deepsets: True
+        embed_flux_error: True
+        embed_meta_data: True
+        bias: True
+        t_max: 2.0
+        N_points: 50
+        use_hyper_integrator: False
     decoder: 
       name: "SigmoidBasisDecoder"
       config:
-        latent_dim: 8
+        latent_dim: 6
         hidden: 64
-        BAND_EMB_DIM: 6
-        num_basis: 16
-        dropout: 0.05
-        activation: "GELU"
+        BAND_EMB_DIM: 24
+        num_basis: 4
+        dropout: 0.01
+        activation: SiLU
         decoupled: True
         nlayers: 2
         decouple_dim: 
           - 1
           - 1
         band_dot_prod: True
+        logscale_output: False
+        suppress_higher_terms: False
+        norm: True
+        rescale_decoupled_network: True
+        sed_mode: True
+        accumulate: True
 
 exp_params:
   name: GRUVAEExperiment
@@ -70,8 +97,10 @@ exp_params:
       optimizer: 
         name: "Adam"
         config:
-          LR: 2e-3
-          weight_decay: 0.0 #5e-5 #2e-3 #$0.0 #2e-5 #1e-4 #1e-5 #1e-5 #1 #1 #1e-5
+          LR: 2e-2
+          weight_decay: 2e-5 #0.0 #5e-6 #2.0e-04 #0.0 #2e-5 #0.0 #5e-5 #2e-3 #$0.0 #2e-5 #1e-4 #1e-5 #1e-5 #1 #1 #1e-5
+          encoder_scale_factor: 0.1
+          reduce_on_plateau: True
     metrics: 
       name: Metrics
       config:
@@ -83,19 +112,18 @@ exp_params:
 
 trainer_params:
   max_epochs: 3000
-  max_epochs: 30
   accelerator: "auto"
   devices: 1
   gradient_clip_val: 0.1
   accumulate_grad_batches: 1
   num_nodes: 1
   strategy: "ddp"
-  log_every_n_steps: 10
+  log_every_n_steps: 50
   #resume_from_checkpoint: "/scratch/jackob/logs/BandAwareDeepSetGRUODEVAE_512_128_128/version_5/checkpoints/epoch=65-val_loss=1.01.ckpt"
   #num_sanity_val_steps: 4
   #detect_anomaly: True
 
 logging_params:
   manual_seed: 42
-  save_dir: "logs"
+  save_dir: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/logs/"
   name: "BandAwareGRUODEVAE"

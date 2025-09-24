@@ -50,8 +50,11 @@ class Metrics:
         batch = output['batch']
         pred = output['out']['reconstructed'][..., 0]
         true = batch['flux_full'][..., 0]
-        mask = batch['in_sample_mask']
+        mask = batch['pad_mask_full']
         if self.log_flux:
+            scale = batch['flux_norm_info'][0][-1]
+            pred = (pred + 0.5)*scale
+            true = (true + 0.5)*scale
             pred = log_to_linear(pred)
             true = log_to_linear(true)
 
@@ -68,17 +71,23 @@ class Metrics:
         batch = output['batch']
         pred = output['out']['reconstructed'][..., 0]
         true = batch['flux_full'][..., 0]
-        mask = batch['in_sample_mask']
+        mask = batch['pad_mask_full']
         sigma = batch['flux_err_full'][..., 0]
         if self.log_flux:
+            scale = batch['flux_norm_info'][0][-1]
+            pred = (pred + 0.5)*scale
+            true = (true + 0.5)*scale
+            
             pred = log_to_linear(pred)
             true = log_to_linear(true)
+            sigma = sigma * scale * np.log(10) * (torch.abs(pred) + 1)
 
         z = (pred - true) / (
-            sigma * mask + (~mask) * 1e9)
+            sigma) * mask# + (~mask) * 1e9)
         counts = mask.sum(1).clamp_min(1)
+        
         z_mean = z.sum(1) / counts
-        z_max = (z.abs() + (~mask) * (-1e9)).max(1)[0]
+        z_max = (z.abs()).max(1)[0]
 
         return {'MeanZ': z_mean, 'MaxZ': z_max}
 
@@ -87,8 +96,11 @@ class Metrics:
         batch = output['batch']
         pred = output['out']['reconstructed'][..., 0]
         true = batch['flux_full'][..., 0]
-        mask = batch['in_sample_mask']
+        mask = batch['pad_mask_full']
         if self.log_flux:
+            scale = batch['flux_norm_info'][0][-1]
+            pred = (pred + 0.5)*scale
+            true = (true + 0.5)*scale
             pred = log_to_linear(pred)
             true = log_to_linear(true)
 
