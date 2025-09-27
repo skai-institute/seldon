@@ -184,3 +184,5 @@ TAE/data/*.pkl
 *.ckpt
 .DS_Store
 TAE/.DS_Store
+get_confustion_matrix.py
+realtime_prediction.png
