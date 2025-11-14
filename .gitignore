@@ -221,7 +221,14 @@ figs/
 *.zip
 *.safetensors
 logs/
+*.ascii
+*.out
+*.err
 
 # submission scripts
 *.sbatch
 *.sh
+*.bash
+
+# swapfiles
+*.swp
