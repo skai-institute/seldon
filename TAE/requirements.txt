@@ -1,0 +1,16 @@
+torch
+torchvision
+pytorch-lightning
+torch_optimizer
+hydra-core
+omegaconf
+numpy
+scipy
+pandas
+matplotlib
+scikit-learn
+h5py
+tqdm
+requests
+filelock
+

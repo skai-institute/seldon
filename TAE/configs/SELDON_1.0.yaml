@@ -1,0 +1,122 @@
+dataset:
+  name: LightCurveDataLoader
+  config:
+    lightcurve_path: /projects/ncsa/caps/skai/data/cleaned_data_8_previous_nondetects_zeroed_merged.pkl
+    class_filter: 
+      - 'SNIa'        
+    flux_normalization: minmax
+    time_normalization: std
+    min_points: 10
+    max_points: 200
+    augmentations: 
+      - CutOffSample
+    batch_size: 2048
+    num_workers: 16
+    mode: pickle
+    t_max: 71.9
+    resample: False
+    include_non_detections: False
+    include_meta_data: False
+    t_offset: 0.0
+    group_classes: False
+    zero_non_detections: True
+    pin_memory: True
+
+model_params:
+  name: BandAwareAutoencoder
+  config:
+    latent_dim: 64
+    variational: True
+    kl_weight: 0.001
+    loss: 
+      name: MaskedHuberLoss
+      config:
+        weight_bands: False 
+        weight_classes: False 
+        inverse_transform: False
+        delta: 1.0
+        scale_delta_by: Null
+        scale_recon: False # Default: True, False is useful with logscale_output in the decoder and inverse_transform=True, breaks plotting
+    is_adversarial: False
+    adv_epsilon: 0.0005
+    adv_alpha: 0.8
+    encoder:
+      name: "RecurrentODEEncoder"
+      config:
+        input_dim: 128
+        hidden_dim: 128
+        dropout: 0.0
+        nlayers: 4
+        BAND_EMB_DIM: 4
+        pooling: "sum"
+        norm: False
+        activation_ode: Softplus
+        activation_deepsets: PReLU
+        aggregate_with_deepsets: True
+        embed_flux_error: False
+        embed_meta_data: False
+        bias: True
+        t_max: 1.0
+        N_points: 50
+        use_hyper_integrator: False
+        atol: 1.0 
+        rtol: 1.0 
+        pcoeff: 0.2 # For the PID controller, we have Proportional Term
+        icoeff: 0.5 # Integral Term
+        dcoeff: 0.0 # derivative term, (0, 1, 0) is the basic integral controller
+        dt_max: 0.5 
+        dt_min: 0.0
+        use_fixed_solver: False
+        scale_embedding_grad_by_freq: True
+    decoder: 
+      name: "GaussianBasisDecoder"
+      config:
+        latent_dim: 64
+        hidden: 128
+        BAND_EMB_DIM: 16
+        num_basis: 8
+        dropout: 0.2
+        activation: GELU
+        decoupled: True
+        nlayers: 4
+        decouple_dim: 
+          - 8
+          - 8
+        band_dot_prod: True
+        scale_embedding_grad_by_freq: True
+
+exp_params:
+  name: GRUVAEExperiment
+  config:
+    params:
+      dataset: SNDataModuleParquet
+      figures: []
+      optimizer: 
+        name: "Adam"
+        config:
+          LR: 0.002
+          weight_decay: 0.0 
+          encoder_scale_factor: 1.0
+          reduce_on_plateau: False
+    metrics: 
+      name: Metrics
+      config:
+        metrics:
+          - fractional_errors
+          - z_scores
+
+trainer_params:
+  max_epochs: 3000
+  accelerator: "auto"
+  devices: "auto"
+  gradient_clip_val: 0.1
+  accumulate_grad_batches: 1
+  num_nodes: 1
+  strategy: "ddp"
+  log_every_n_steps: 50
+
+
+logging_params:
+  manual_seed: 42
+  save_dir: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/logs/"
+  name: "SELDON_1.0"
