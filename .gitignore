@@ -207,20 +207,21 @@ marimo/_lsp/
 __marimo__/
 
 # Images and figures
-.png
-.jpg
-.jpeg
+*.png
+*.jpg
+*.jpeg
 figs/
 
 # Datafiles and tarballs
-.parquet
-.pickle
-.tar.gz
-.tar
-.gz
-.zip
-.safetensors
+*.parquet
+*.pickle
+*.tar.gz
+*.tar
+*.gz
+*.zip
+*.safetensors
 logs/
 
 # submission scripts
-.sbatch
+*.sbatch
+*.sh
