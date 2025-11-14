@@ -1,0 +1,32 @@
+name: tae
+channels:
+  - conda-forge
+  - http://ssb.stsci.edu/astroconda
+dependencies:
+  - python=3.9
+  - pytorch=2.7.1
+  - lightning=2.5.2
+  - lightning-bolts=0.7.0
+  - lightning-utilities=0.15.2
+  - torchvision
+  - hydra-core
+  - omegaconf
+  - numpy
+  - seaborn
+  - pandas
+  - scipy
+  - astropy
+  - scikit-learn
+  - matplotlib
+  - pyarrow
+  - fastparquet
+  - tensorboard
+  - h5py
+  - pip
+  - pip:
+    - umap
+    - requests
+    - torch_optimizer
+    - git+https://github.com/martenlienen/torchode
+    - torchdiffeq
+    - safetensors

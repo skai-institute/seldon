@@ -205,3 +205,30 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Images and figures
+*.png
+*.jpg
+*.jpeg
+figs/
+
+# Datafiles and tarballs
+*.parquet
+*.pickle
+*.tar.gz
+*.tar
+*.gz
+*.zip
+*.safetensors
+logs/
+*.ascii
+*.out
+*.err
+
+# submission scripts
+*.sbatch
+*.sh
+*.bash
+
+# swapfiles
+*.swp

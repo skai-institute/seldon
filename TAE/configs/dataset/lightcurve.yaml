@@ -1,0 +1,6 @@
+name: 'LightCurveData'
+config:
+  data_dir: '~/'
+  batch_size: -1
+  num_workers: 4
+  pad_length: 100
