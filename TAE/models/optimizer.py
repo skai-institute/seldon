@@ -108,13 +108,18 @@ class Adam:
         elif self.encoder_scale_factor != 1:
             encoder_parameters = [p for p in model.encoder.parameters()]
             encoder_parameter_ids = [id(p) for p in encoder_parameters]
-            other_parameters = [p for p in model.parameters() if id(p) not in encoder_parameter_ids]
+            decoder_non_decoupled_params = [p for p in model.decoder.to_params.decoder.decoder.parameters()]
+            decoder_non_decoupled_param_ids = [id(p) for p in model.decoder.to_params.decoder.decoder.parameters()]
+            other_parameters = [p for p in model.parameters() if id(p) not in encoder_parameter_ids and id(p) not in decoder_non_decoupled_param_ids]
+            
             optims = optim.Adam(
                 [
                     {"params":other_parameters, "lr":self.lr},
-                    {"params":encoder_parameters, "lr":self.lr*self.encoder_scale_factor}
+                    {"params":encoder_parameters, "lr":self.lr*self.encoder_scale_factor, 'weight_decay':self.weight_decay},
+                    {"params":decoder_non_decoupled_params, 'weight_decay':self.weight_decay}
                 ],
-                weight_decay=self.weight_decay,
+                weight_decay=0.0,#,self.weight_decay,
+                lr=self.lr
             )
 
         

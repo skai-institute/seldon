@@ -113,13 +113,15 @@ class MaskedHuberLoss(nn.Module):
                  weight_classes=True, 
                  inverse_transform=True,
                  alpha: float = 0.9,
-                 scale_delta_by = None):
+                 scale_delta_by = None,
+                 scale_recon = True,):
         super().__init__()
         self.eps = eps
         self.delta = delta
         self.weight_bands = weight_bands
         self.weight_classes = weight_classes
         self.inverse_transform = inverse_transform
+        self.scale_recon = scale_recon
 
         self.weighting_func = nn.Softmax(dim=1)
         self.weighting_func_out = nn.Softmin(dim=1)
@@ -163,10 +165,10 @@ class MaskedHuberLoss(nn.Module):
         
         if self.inverse_transform:# 1000:
             scale = batch['flux_norm_info'][0][-1]
-            flux_transform = lambda x: torch.sign((x+0.5)*scale) * (10 ** ((torch.absolute((x + 0.5)*scale).clamp_max(9.0)-3))*1000 - 1)
+            flux_transform = lambda x, scale: torch.sign((x+0.5)*scale) * (10 ** ((torch.absolute((x + 0.5)*scale).clamp_max(9.0)-3))*1000 - 1)
 
             target = flux_transform(
-                target
+                target, scale
             )
             sigma = (
                 sigma
@@ -174,9 +176,11 @@ class MaskedHuberLoss(nn.Module):
                 * np.log(10.0)
                 * (torch.absolute(target) + 1)
             )
+            if not self.scale_recon: # Don't apply the min-max scaling to the reconstruction (assume it is already applied)
+                scale = 1.0 
 
             recon = flux_transform(
-                recon
+                recon, scale
             )
         
         delta = self.delta

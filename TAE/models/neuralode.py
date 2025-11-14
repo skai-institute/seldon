@@ -9,30 +9,43 @@ import torchode as tode
 
 class ODESolver(nn.Module):
 
-    def __init__(self, ode_net):
+    def __init__(self, ode_net, atol=1.0, rtol=1.0, pcoeff=0.2, icoeff=0.5, 
+            dcoeff=0.0, dt_max=0.5, dt_min=0.0, use_fixed_solver=False):
 
         super().__init__()
 
         self.ode_net = ode_net
+        self.use_fixed_solver = use_fixed_solver
         self.term = tode.ODETerm(self.ode_net)
-        #self.step_method = tode.Euler(self.term)
         self.step_method = tode.Tsit5(self.term)
-        #self.step_size_controller = tode.IntegralController(atol=1e-5, rtol=1e-3, term=self.term)
-        #self.step_size_controller = tode.FixedStepController()
-        self.step_size_controller = tode.PIDController(
-            atol=1.0, rtol=1.0, pcoeff=0.2, icoeff=0.5, 
-            dcoeff=0.0, term=self.term, dt_max=0.5, dt_min=-0.0
-        )
+        if use_fixed_solver:
+            self.step_size_controller = tode.FixedStepController()
+        else:
+            self.step_size_controller = tode.PIDController(
+                atol=atol, rtol=rtol, pcoeff=pcoeff, icoeff=icoeff, 
+                dcoeff=dcoeff, term=self.term, dt_max=dt_max, dt_min=dt_min
+            )
+        
         self.solver = tode.AutoDiffAdjoint(self.step_method, 
                                            self.step_size_controller, 
                                            backprop_through_step_size_control=True)
         #self.solver = tode.BacksolveAdjoint(self.term, self.step_method, self.step_size_controller)
         #self.jit_solver = torch.compile(self.solver)
+        
 
-    def forward(self, x, t):
-        #dt0 = torch.full((x.shape[0],), 0.1, device=x.device).detach()
+    @torch.jit.export
+    def forward(self, x, t_eval=None, t_start=None, t_end=None):
+        
+        if self.use_fixed_solver:
+            if t_eval is None:
+                dt0 = t_end-t_start
+            else:
+                dt0 = (t_eval[:, -1] - t_eval[:, 0])
 
-        sol = self.solver.solve(tode.InitialValueProblem(y0=x, t_eval=t))
+            sol = self.solver.solve(tode.InitialValueProblem(y0=x, t_eval=t_eval, t_start=t_start, t_end=t_end), dt0=dt0)
+        else:
+            sol = self.solver.solve(tode.InitialValueProblem(y0=x, t_eval=t_eval, t_start=t_start, t_end=t_end))
+
         return sol.ts, sol.ys
 
 @register_module
@@ -110,7 +123,9 @@ class RNNODEEncoder(nn.Module):
                  nlayers=4, 
                  norm=True,
                  activation='Softplus',
-                 use_hyper_integrator=False):
+                 use_hyper_integrator=False,
+                 atol=1.0, rtol=1.0, pcoeff=0.2, icoeff=0.5, 
+                 dcoeff=0.0, dt_max=0.5, dt_min=0.0, use_fixed_solver=False):
 
         super().__init__()
 
@@ -123,6 +138,7 @@ class RNNODEEncoder(nn.Module):
         self.dropout = dropout
         self.activation = activation
         self.use_hyper_integrator = use_hyper_integrator
+        self.use_fixed_solver = use_fixed_solver
 
         self.rnn_cell = nn.GRUCell(hidden_size, hidden_size, bias=bias, device=device, dtype=dtype)
         if self.use_hyper_integrator:
@@ -140,9 +156,11 @@ class RNNODEEncoder(nn.Module):
                                 norm=norm,
                                 activation=activation,
                                 bias=bias)
-            self.integrator = ODESolver(self.ode_net)
+            self.integrator = ODESolver(self.ode_net, atol=atol, rtol=rtol, pcoeff=pcoeff, icoeff=icoeff, 
+                 dcoeff=dcoeff, dt_max=dt_max, dt_min=dt_min, use_fixed_solver=use_fixed_solver)
         #self.integrator = odeint
 
+    @torch.jit.export
     def forward(self, x, time, mask, time_sorted=None, sequence_batch_mask=None, hx=None):
         # x is (S, B, E) where E is input_size
         # time is (S, B)
@@ -162,25 +180,27 @@ class RNNODEEncoder(nn.Module):
         # The h_p's need to be maintained when evolved to masked points in time
         # or we can forward fill them in the dataloader
         # we should think about which method is more general and easier to extend
-        #output = []
+        output = []
         for t in range(1, seq_len):
             t0 = time[seq_len-t] # (B)
             t1 = time[seq_len-t-1] # (B)
             time_mask = (t1 == t0)
-            ts = torch.stack([t0, t1-self.dt*time_mask]).t().contiguous()#.detach() # (B, 2) # USE THE t1==t0 MASK!
-            h_p = self.integrator(h_t_minus_1, ts)[1][:, -1]*~time_mask[:, None] + h_t_minus_1 * time_mask[:, None]#* mask[seq_len-t][:, None] # (B, 2), when t1 == t0 this gives nans!
+            #ts = torch.stack([t0, t1-self.dt*time_mask]).t().contiguous()#.detach() # (B, 2) # USE THE t1==t0 MASK!
+            #h_p = self.integrator(h_t_minus_1, ts)[1][:, -1]*~time_mask[:, None] + h_t_minus_1 * time_mask[:, None]#* mask[seq_len-t][:, None] # (B, 2), when t1 == t0 this gives nans!
+            h_p = self.integrator(h_t_minus_1, None, t_start=t0, t_end=t1-self.dt*time_mask)[1][:, -1]*~time_mask[:, None] + h_t_minus_1 * time_mask[:, None]#* mask[seq_len-t][:, None] # (B, 2), when t1 == t0 this gives nans!
+
             #assert torch.all(torch.isfinite(h_p)), ts
             total_mask = mask[seq_len-t-1][:, None]
             h_t = self.rnn_cell(x[seq_len-t-1], h_p) * total_mask + (~total_mask) * h_p #h_t_minus_1, # NOTE: THIS IS THE CHANGE
             #assert torch.all(torch.isfinite(h_t))
-            #output.append(h_t)
+            output.append(h_t)
             h_t_minus_1 = h_t
             #break
-        #output = torch.stack(output)
-        #if self.batch_first:
-        #    output = output.transpose(0, 1)
-        return None, h_t
-        #return output, h_t
+        output = torch.stack(output)
+        if self.batch_first:
+            output = output.transpose(0, 1)
+        #return None, h_t
+        return output, h_t
    
 
 class ODEFunc(nn.Module):

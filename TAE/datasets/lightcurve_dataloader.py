@@ -39,6 +39,10 @@ class LightCurveDataLoader(pl.LightningDataModule):
         mode='pickle',
         include_non_detections=False,
         include_meta_data=False,
+        group_classes=True,
+        zero_non_detections=False,
+        pin_memory=True,
+        balance_class_samples=False,
         **kwargs
     ):
         super().__init__()
@@ -58,6 +62,14 @@ class LightCurveDataLoader(pl.LightningDataModule):
         self.include_non_detections = include_non_detections
         self.include_meta_data = include_meta_data
         self.meta_data = None
+        self.group_classes = group_classes
+        self.zero_non_detections = zero_non_detections
+        self.pin_memory = pin_memory
+        self.balance_class_samples = balance_class_samples
+        if self.zero_non_detections and not include_non_detections:
+            import sys
+            print("WARNING: zero_non_detections is True but non-detections are not used", file=sys.stderr)
+            self.zero_non_detection = True
         if include_non_detections:
             if mode != "parquet":
                 import sys
@@ -82,7 +94,7 @@ class LightCurveDataLoader(pl.LightningDataModule):
             self.full_class_names = full_class_names #self.manager.list(full_class_names)
 
         elif self.mode == 'parquet':
-            df = pd.read_parquet(self.lightcurve_path, columns=['ELASTICC_class','MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG'])
+            df = pd.read_parquet(self.lightcurve_path, columns=['ELASTICC_class','MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG', 'REDSHIFT_FINAL', "SNID"])
             df['class'] = df['ELASTICC_class'].map(ELAsTiCC_to_Astrophysical_mappings)
             if self.class_filter is not None:
                 df = df[df['class'].isin(tuple(self.class_filter))]
@@ -118,6 +130,9 @@ class LightCurveDataLoader(pl.LightningDataModule):
             df['PHOTFLAG_clean']   = [np.asarray(x)[m0] for x,  m0 in zip(PHOTFLAG_arr,    kept_flags)]
             df['detection_flag_clean']   = [np.asarray(x)[m0] > 0 for x,  m0 in zip(PHOTFLAG_arr,    kept_flags)]
 
+            if not self.group_classes:
+                df['class'] = df['ELASTICC_class']
+
             df = df.drop(columns=['ELASTICC_class','MJD','FLUXCAL','FLUXCALERR','BAND'])
 
             self.full_light_curves = df
@@ -133,8 +148,9 @@ class LightCurveDataLoader(pl.LightningDataModule):
         self.init_class_weights()
         self.init_light_curves()
         self.init_band_index()
-        self.init_data_stats()
         self.init_meta_data()
+        self.init_data_stats()
+        
 
         self.dataset = LightCurvePreprocessor(        
             light_curves = self.full_light_curve_array,
@@ -187,9 +203,31 @@ class LightCurveDataLoader(pl.LightningDataModule):
             columns = ['detection_flag_clean']
             meta_data_array = [
                 np.column_stack([np.asarray(self.full_light_curves.iloc[i][c], dtype=np.float32) for c in columns])
-                for i in tqdm(range(len(self.full_light_curves)), desc="Extracting Meta Data")
+                for i in tqdm(range(len(self.full_light_curves)), desc="Extracting PHOT Flags")
+            ]
+            columns = ['REDSHIFT_FINAL']
+            redshift_data_array = [
+                np.column_stack([np.asarray(self.full_light_curves.iloc[i][c], dtype=np.float32) for c in columns])
+                for i in tqdm(range(len(self.full_light_curves)), desc="Extracting Redshifts")
+            ]
+            columns = ['SNID']
+            snid_data_array = [
+                np.column_stack([np.asarray(self.full_light_curves.iloc[i][c], dtype=np.int64) for c in columns])
+                for i in tqdm(range(len(self.full_light_curves)), desc="Extracting SNID")
             ]
             self.meta_data = {'detection_flag':meta_data_array}
+            self.meta_data.update({'REDSHIFT_FINAL': redshift_data_array})
+            self.meta_data.update({'SNID': snid_data_array})
+
+        if self.zero_non_detections:
+            if self.include_meta_data:
+                for arr, detection_flag in tqdm(zip(self.full_light_curve_array, meta_data_array), desc='Setting Negative Fluxes to Zero'):
+                    arr[arr[:, 1]<0, 1] = 0.0
+                    arr[detection_flag[:, 0]==0, 1] = 0.0
+            else:
+                for arr in tqdm(self.full_light_curve_array, desc='Setting Negative Fluxes to Zero'):
+                    arr[arr[:, 1]<0, 1] = 0.0
+         
 
     def init_light_curves(self):
 
@@ -203,14 +241,16 @@ class LightCurveDataLoader(pl.LightningDataModule):
             columns = ["days_since_first_observation", "FLUXCAL", "FLUXCALERR"]
             self.full_light_curve_array = [
                 df[columns].astype(np.float32).reset_index(drop=True).values
-                for df in tqdm(self.full_light_curves, desc="Extracting LCs") if len(df) > self.min_points
+                for df in tqdm(self.full_light_curves, desc="Extracting LCs") if len(df) >= self.min_points
             ]
         else:
             raise ValueError(f"Mode ({self.mode}) invalid.")
 
-        #for arr in tqdm(self.full_light_curve_array, desc='Setting Negative Fluxes to Zero'):
-        #    arr[:, 1][arr[:, 1]<0] = 0.0
-        #    #assert (arr[:, 1] >= 0).all() # BE CAREFUL! MANAGED LISTS ARE NOT REGULARLY MUTABLE
+        #if self.zero_non_detections:
+        #    for arr in tqdm(self.full_light_curve_array, desc='Setting Negative Fluxes to Zero'):
+        #        arr[:, 1][arr[:, 1]<0] = 0.0
+        #        
+        #        #assert (arr[:, 1] >= 0).all() # BE CAREFUL! MANAGED LISTS ARE NOT REGULARLY MUTABLE
         
         #self.full_light_curve_array = self.manager.list(self.full_light_curve_array)
         
@@ -223,7 +263,7 @@ class LightCurveDataLoader(pl.LightningDataModule):
                 .map(BAND_IDX_MAP)
                 .reset_index(drop=True)
                 .values
-                for df in tqdm(self.full_light_curves, desc="Mapping Bands to Indices")
+                for df in tqdm(self.full_light_curves, desc="Mapping Bands to Indices") if len(df) >= self.min_points
             ]
         elif self.mode == 'parquet':
             self.band_array = [
@@ -273,7 +313,7 @@ class LightCurveDataLoader(pl.LightningDataModule):
             shuffle=True,
             num_workers=self.num_workers,
             collate_fn=enhanced_collate_fn,
-            pin_memory=True,
+            pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers,
             prefetch_factor=self.prefetch_factor,
             drop_last=True,
@@ -287,7 +327,7 @@ class LightCurveDataLoader(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=enhanced_collate_fn,
-            pin_memory=True,
+            pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers,
             prefetch_factor=self.prefetch_factor,
             drop_last=False,
@@ -312,17 +352,37 @@ def test():
     from tqdm import tqdm
     # Run a test of the modules
     lightcurve_path = "/projects/ncsa/caps/skai/data/ELAsTiCC/complete.parquet"
-    class_filters = ['SNIa', 'SNIax']
+    class_filters = ['SNIa', 'SNII', 'SNIb/c', 'SNIax', 'SN91bg', 'SLSN', 'KN', 'CART', 'TDE', 'PISN', 'Dwarf Novae', 'ILOT', 'M-dwarf Flare']
     mode = 'parquet'
-    augmentations = ['CutOffSample', 'FullSample', 'BandSample', 'SparseSample']
+    augmentations = ['CutOffSample', 'FullSample', 'BandSample', 'SparseSample', 'CutOnSample']
 
     dataloader = LightCurveDataLoader(lightcurve_path=lightcurve_path, 
                                       mode=mode, class_filter=class_filters, 
-                                      num_workers=0, augmentations=augmentations)
+                                      num_workers=1, augmentations=augmentations,
+                                      zero_non_detections=True, include_meta_data=True,
+                                      include_non_detections=True, group_classes=False, resample=False, 
+                                      t_offset=-1.0, flux_normalization='minmax', time_normalization='std',
+                                      t_max='infer', pin_memory=True)
     dataloader.setup()
 
-    for batch in dataloader.val_dataloader():
+    batch_data = []
+
+    for batch in dataloader.test_dataloader():
         len(batch)
+        for i in tqdm(range(len(batch['x_input']))):
+            batch_data.append(batch['x_input'][i][batch['in_sample_mask'][i]])
+            #print(batch_data[-1].shape)
+    batch_data = np.vstack(batch_data)
+    for i in range(3):
+        name = ['Scaled Time', 'Scaled Flux', 'Scaled Flux Error'][i]
+        plt.figure()
+        plt.hist(batch_data[:, i], bins=int(np.sqrt(len(batch_data))), histtype='step')
+        plt.xlabel(name)
+        plt.ylabel('counts')
+        #plt.yscale('log')
+        plt.savefig(f'figs/tests/test_dataloader_hist_{name}.png')
+        
+
 
     light_curve = batch['x_input'].detach().cpu().numpy()
     print('Batch Shape:', light_curve.shape[0])

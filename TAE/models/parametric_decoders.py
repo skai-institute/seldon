@@ -26,7 +26,8 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
         band_dot_prod: bool = False,
         norm: bool = False,
         rescale_decoupled_network: bool = False,
-        sed_mode: bool = False
+        sed_mode: bool = False,
+        scale_embedding_grad_by_freq: bool = False,
     ):
         super().__init__()
         if isinstance(decouple_dim, list):
@@ -61,7 +62,9 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 band_dot_prod=band_dot_prod,
                 nlayers=self.nlayers,
                 norm=norm,
-                sed_mode=sed_mode,)
+                sed_mode=sed_mode,
+                scale_embedding_grad_by_freq=scale_embedding_grad_by_freq
+                )
         elif isinstance(self.decouple_dim, int):
             self.first_decoder = None
             self.inp_dim = self.decouple_dim
@@ -79,7 +82,8 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 nlayers=self.nlayers,
                 norm=norm,
                 rescale_decoupled_network=rescale_decoupled_network,
-                sed_mode=sed_mode)
+                sed_mode=sed_mode,
+                scale_embedding_grad_by_freq=scale_embedding_grad_by_freq)
         
         else:
             self.inp_dim = self.decouple_dim[0]+self.decouple_dim[1]# gives back 2 decoupled slices on the first dim
@@ -104,7 +108,8 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 nlayers=self.nlayers,
                 norm=norm,
                 rescale_decoupled_network=rescale_decoupled_network,
-                sed_mode=sed_mode)
+                sed_mode=sed_mode,
+                scale_embedding_grad_by_freq=scale_embedding_grad_by_freq)
             self.decoder = GeneralizedDecoupledBandParametricDecoder(
                 latent=latent - self.inp_dim,
                 hidden=c_hidden_dim,
@@ -119,7 +124,8 @@ class GeneralizedDecoupledBandParametricDecoder(nn.Module):
                 nlayers=self.nlayers,
                 norm=norm,
                 rescale_decoupled_network=rescale_decoupled_network,
-                sed_mode=sed_mode
+                sed_mode=sed_mode,
+                scale_embedding_grad_by_freq=scale_embedding_grad_by_freq
             )
 
     def forward(self, z, t, band_idx):
@@ -151,6 +157,7 @@ class DecoupledBandParametricDecoder(nn.Module): # TODO: Generalize this (amp in
         norm: bool = False,
         rescale_decoupled_network: bool = False,
         sed_mode: bool = False,
+        scale_embedding_grad_by_freq: bool = False,
     ):
         super().__init__()
         self.decouple_dim = decouple_dim
@@ -179,7 +186,8 @@ class DecoupledBandParametricDecoder(nn.Module): # TODO: Generalize this (amp in
             band_dot_prod=band_dot_prod,
             nlayers=self.nlayers,
             norm=norm,
-            sed_mode=sed_mode)
+            sed_mode=sed_mode,
+            scale_embedding_grad_by_freq=scale_embedding_grad_by_freq)
         self.to_params = BandParametricDecoder(
             latent=latent-self.decouple_dim,
             hidden=c_hidden_dim,
@@ -192,7 +200,8 @@ class DecoupledBandParametricDecoder(nn.Module): # TODO: Generalize this (amp in
             band_dot_prod=band_dot_prod,
             nlayers=self.nlayers,
             norm=norm,
-            sed_mode=sed_mode
+            sed_mode=sed_mode,
+            scale_embedding_grad_by_freq=scale_embedding_grad_by_freq
         )
 
     def forward(self, z, t, band_idx):
@@ -218,7 +227,8 @@ class BandParametricDecoder(nn.Module):
         nlayers=4,
         band_dot_prod = False,
         norm: bool = False,
-        sed_mode: bool = False
+        sed_mode: bool = False,
+        scale_embedding_grad_by_freq: bool = False,
     ):
         super().__init__()
         self.K = K
@@ -234,7 +244,7 @@ class BandParametricDecoder(nn.Module):
             import sys
             print("WARNING: both `sed_mode` and `band_dot_prod` are true.  Will only use SED mode", file=sys.stderr)
         if self.BAND_EMB_DIM > 0:
-            self.band_emb = nn.Embedding(self.NUM_BANDS, self.BAND_EMB_DIM, scale_grad_by_freq=False)
+            self.band_emb = nn.Embedding(self.NUM_BANDS, self.BAND_EMB_DIM, scale_grad_by_freq=scale_embedding_grad_by_freq)
 
         if self.band_dot_prod or self.sed_mode:
             assert self.BAND_EMB_DIM > 0, "Cannot perform a dot product without a band embedding"
@@ -244,6 +254,7 @@ class BandParametricDecoder(nn.Module):
             inp = latent + BAND_EMB_DIM  # concat z‖e_b
             self.mlp = ResNet(inp, NUM_BANDS * self.DF * K, nlayers=self.nlayers, nhid=hidden, activation=activation, dropout=dropout, norm=norm)
  
+        self.compile()
 
     def forward(self, z, t, band_idx):  # t:(B,T,1)
 
@@ -378,7 +389,8 @@ class GaussianBasisDecoder(nn.Module):
         suppress_higher_terms=False,
         rescale_decoupled_network: bool = False,
         sed_mode: bool = False,
-        accumulate: bool = False
+        accumulate: bool = False,
+        scale_embedding_grad_by_freq: bool = False
     ):
         super().__init__()
         self.band_dot_prod = band_dot_prod
@@ -412,7 +424,8 @@ class GaussianBasisDecoder(nn.Module):
                 nlayers=self.nlayers,
                 norm=norm,
                 rescale_decoupled_network=rescale_decoupled_network,
-                sed_mode=sed_mode
+                sed_mode=sed_mode,
+                scale_embedding_grad_by_freq=scale_embedding_grad_by_freq
             )
         else:
             self.to_params = BandParametricDecoder(
@@ -427,7 +440,8 @@ class GaussianBasisDecoder(nn.Module):
                 band_dot_prod=band_dot_prod,
                 nlayers=self.nlayers,
                 norm=norm,
-                sed_mode=sed_mode
+                sed_mode=sed_mode,
+                scale_embedding_grad_by_freq=scale_embedding_grad_by_freq
             )
         self.softplus = nn.Softplus()
         self.exp_map = ExponentialDistriubtionQuantileMapping(init=0.25)
@@ -520,7 +534,11 @@ class SigmoidBasisDecoder(nn.Module):
         norm=False,
         rescale_decoupled_network: bool = False,
         sed_mode: bool = False,
-        accumulate: bool = False
+        accumulate: bool = False,
+        include_redshift: bool = False,
+        tanhshrink_centroids: bool = False,
+        autoscale_outputs: bool = False,
+        scale_embedding_grad_by_freq: bool = False
     ):
         super().__init__()
         self.num_basis = num_basis
@@ -531,10 +549,15 @@ class SigmoidBasisDecoder(nn.Module):
         self.sed_mode = sed_mode
         self.band_emb_dim = BAND_EMB_DIM
         self.accumulate = accumulate
+        self.include_redshift = include_redshift
+        self.tanhshrink_centroids = tanhshrink_centroids
+        self.autoscale_outputs = autoscale_outputs
         # DF = 3 → (w_raw, μ_raw, log σ)
         self.multiple_decouple = isinstance(decouple_dim, list)
-        DF = 4
-        if self.multiple_decouple:
+        DF = 4 # (mu_offset, w_raw, mu_raw, log_sigma)
+        if self.multiple_decouple: # (mu_offset, w_offset, w_raw, mu_raw, log_sigma)
+            DF += 1
+        if self.include_redshift: # (mu_offset, w_offset, redshift, w_raw, mu_raw, log_sigma)
             DF += 1
         if decoupled:
             self.to_params = GeneralizedDecoupledBandParametricDecoder(
@@ -550,7 +573,8 @@ class SigmoidBasisDecoder(nn.Module):
                 band_dot_prod=band_dot_prod,
                 norm=norm,
                 rescale_decoupled_network=rescale_decoupled_network,
-                sed_mode=sed_mode
+                sed_mode=sed_mode,
+                scale_embedding_grad_by_freq=scale_embedding_grad_by_freq
             )
         else:
             self.to_params = BandParametricDecoder(
@@ -564,7 +588,8 @@ class SigmoidBasisDecoder(nn.Module):
                 dropout=dropout,
                 band_dot_prod=band_dot_prod,
                 norm=norm,
-                sed_mode=sed_mode
+                sed_mode=sed_mode,
+                scale_embedding_grad_by_freq=scale_embedding_grad_by_freq
             )
         self.softplus = nn.Softplus()
         self.sigmoid = nn.Sigmoid()
@@ -578,8 +603,15 @@ class SigmoidBasisDecoder(nn.Module):
             self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM, scale_grad_by_freq=False)
             self.softmax = nn.Softmax(dim=-1)
 
+        if self.tanhshrink_centroids:
+            self.tanhshrink = nn.Tanhshrink()
+        if self.autoscale_outputs:
+            self.scale = nn.Parameter(torch.randn(1), requires_grad=True)
+        else:
+            self.scale = 1.0
+
     # --------------------------------------------------------------------- #
-    def forward(self, z: torch.Tensor, t: torch.Tensor, band_idx: torch.Tensor):
+    def forward(self, z: torch.Tensor, t: torch.Tensor, band_idx: torch.Tensor, return_parameters: bool=False):
         """
         Args
         ----
@@ -594,20 +626,43 @@ class SigmoidBasisDecoder(nn.Module):
         # (B, T, K, 3)  last dim = (μ_raw, w_raw, log σ)
         params = self.to_params(z, t, band_idx)
         if self.multiple_decouple:
-            mu_offset, w_offset, w_raw, mu_raw, log_sigma = params.unbind(-1)
-            w_offset = torch.mean(self.softplus(w_offset), dim=-1, keepdim=True)
-            if self.accumulate:
-                w_raw = w_raw.cumsum(-1)
-            w_raw = self.sigmoid(w_raw)  # Set global scale
-            w_raw = w_raw - torch.mean(w_raw, dim=-1, keepdim=True) # zero-mean
-            w_raw = w_raw * w_offset
+            if self.include_redshift:
+                mu_offset, w_offset, redshift, w_raw, mu_raw, log_sigma = params.unbind(-1)
+                redshift = torch.mean(redshift, dim=-1, keepdim=True)  # Ensemble Average
+            else:
+                mu_offset, w_offset, w_raw, mu_raw, log_sigma = params.unbind(-1)
+            w_offset = torch.mean(w_offset, dim=-1, keepdim=True) # ensemble average
+            if self.sed_mode:
+                w_offset = torch.mean(w_offset, dim=-2, keepdim=True) # The amplitude is global over all bands
+                # NOTE: Should put some consideration into handling mu_offset since offsets might be a little different per band
+            w_offset = self.softplus(w_offset) # strictly positive, should consider sacling bounds to data
+            if self.accumulate: # want these to end up sorted so that the first weight it positive for the fisrt mu being smallest
+                #w_raw = self.sigmoid(w_raw) # All positive
+                w_raw = w_raw * w_raw # All positive, weight decay towards zero
+                w_raw = w_raw.cumsum(-1) # now they are sorted (Smallest weight first)
+                w_raw = self.sigmoid(-w_raw) # Set relative scale, range 1 NOTE: Might set to range of 2 (for [-1, 1]), largest value first
+            else:
+                w_raw = self.sigmoid(w_raw)  # Set relative scale, range 1 NOTE: Might set to range of 2 (for [-1, 1])
+            w_raw = w_raw - torch.mean(w_raw, dim=-1, keepdim=True) # zero-mean in each basis (But not each band)
+            w_raw = w_raw * w_offset # Set global scale
         else:
             mu_offset, mu_raw, w_raw, log_sigma = params.unbind(-1)  # each (B, T, K)
 
-        mu_offset = torch.mean(mu_offset, dim=-1, keepdim=True)
+        mu_offset = torch.mean(mu_offset, dim=-1, keepdim=True) # 1 centroid per band
+        if self.sed_mode:
+            mu_offset = torch.mean(mu_offset, dim=-2, keepdim=True) # The center is a global attribute over all bands
+            # WARNING: Forcing this over all bands will only allow sed components to adjust their spread, not their offsets!\
+            # Empirically, this seems to make the outputs more squiggly 
+            # This is probably fine if components on one side cancel themselves out to some degree
+            # Should probably think of a better centering method though (in reference to the mean used below on mu_raw)
+            # Options: Range (min-max), median (not differentiable), min, max, Tanhshrink, LayerNorm
         if self.accumulate:
-            mu_raw = mu_raw.cumsum(-1)
-        mu_raw = mu_raw + mu_offset - torch.mean(mu_raw, dim=-1, keepdim=True)
+            mu_raw = mu_raw * mu_raw # All positive, weight decay towards zero
+            mu_raw = mu_raw.cumsum(-1) # sorted with smallest value first
+        if self.tanhshrink_centroids:
+            mu_raw = self.tanhshrink(mu_raw) + mu_offset # Makes mu_raw small rather than centering so we can have a bias
+        else:
+            mu_raw = mu_raw + mu_offset - torch.mean(mu_raw, dim=-1, keepdim=True) # Center the offsets in each basis
 
         mu = mu_raw
         weights = w_raw
@@ -616,8 +671,17 @@ class SigmoidBasisDecoder(nn.Module):
         if self.sed_mode:
             t_expanded = t[:, :, None, :].expand(-1, -1, self.band_emb_dim, self.num_basis) # (B, T, E, K)
             e_b = self.softmax(self.band_emb(band_idx[:, :, 0]))[..., None] #** 2
+            if self.include_redshift: # NOTE: Perhaps we update the band embedding with the redshift? 
+                redshift = torch.mean(redshift, dim=-2, keepdim=True) # Redshift is the same for all bands
         else:
             t_expanded = t.expand(-1, -1, self.num_basis) # (B, T, K)
+            e_b = None
+
+        if self.include_redshift:
+            redshift = self.softplus(redshift) - np.log(2) # Allow for small negative redshift and unbounded positive
+            t_expanded = t_expanded / (1 + redshift) # convert time to rest frame
+            weights = weights / torch.square(1 + redshift) # Convert luminoisty to rest_frame\
+            # NOTE: Should mu spacing account for redshift?  Redshifting t kind of already does this
         basis = torch.sigmoid((t_expanded - mu) * sigma)  # (B, T, K)
 
         if self.suppress_higher_terms: # This allows the network to learn how many basis functions to include
@@ -629,6 +693,10 @@ class SigmoidBasisDecoder(nn.Module):
         self.last_weight = weights.detach()
         self.last_mu = mu.detach()
         self.last_sigma = sigma.detach()
+        if self.include_redshift:
+            self.last_redshift = redshift.detach()
+        if self.sed_mode:
+            self.last_band_embedding = e_b.detach()
 
         # Weighted sum of bases → (B, T, 1)
         f = torch.mean(weights * basis, dim=-1, keepdim=True)
@@ -636,12 +704,24 @@ class SigmoidBasisDecoder(nn.Module):
         if self.sed_mode: # Do a (normalized) dot-product over the SED at each band location
             f = (e_b * f).sum(dim=2) / (e_b).sum(dim=2)
 
-        if self.logscale_output:
-            f = torch.sign(f)*torch.log10(1+torch.absolute(f)) - 0.5
+        # NOTE: This mode will require 'weights' to be very large which can hurt with weight decay
+        # There is also some unaccounted for non-linear scale factor at play here, might consider setting the global weight scale here
+        # Using logscale_output will also make the output function more "wiggly" and will have a harder time supressing higher-order terms
+        if self.logscale_output: # In theory this should work better with redshifts due to amplitude scaling
+            f = (torch.sign(f)*torch.log10(1+torch.absolute(f)) - 0.5) * self.scale**2
         else:
-            f = f - 0.5
+            f = (f - 0.5) * self.scale**2
 
-        return f
+        result = f
+
+        if return_parameters:
+            if self.include_redshift:
+                parameters = (basis, weights, mu, sigma, e_b, redshift)
+            else:
+                parameters = (basis, weights, mu, sigma, e_b, None)
+            result = (f, parameters)
+
+        return result
 
 
 

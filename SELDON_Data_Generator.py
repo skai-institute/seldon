@@ -57,6 +57,7 @@ if __name__ == "__main__":
 
     data_cfg = OmegaConf.load(first_config_file)
     data_cfg['dataset']['config']['num_workers'] = 1
+    data_cfg['dataset']['config']['augmentations'] = ['FullSample']
 
     data_cfg = fill_config(data_cfg)
     data_config = OmegaConf.to_container(data_cfg)
@@ -74,6 +75,7 @@ if __name__ == "__main__":
 
         cfg = OmegaConf.load(config_file)
         cfg['dataset']['config']['num_workers'] = 1
+        data_cfg['dataset']['config']['augmentations'] = ['FullSample']
 
         cfg = fill_config(cfg)
         config = OmegaConf.to_container(cfg)
@@ -102,26 +104,41 @@ if __name__ == "__main__":
         _ = experiment.eval()
         model.eval()
 
-        data_loader = experiment.data.test_dataloader()
+        data_loader = experiment.data.train_dataloader()
+        class_names = set(experiment.data.dataset.class_names)
+        class_map = dict(zip(class_names, range(len(class_names))))
+        print(class_map)
+        with open(config_path / 'class_map.txt', 'w') as f:
+            f.write(str(class_map))
+        with open(config_path/"flux_stats.txt", 'w') as f:
+            f.write(str(experiment.data.flux_stats))
 
         for i, batch in enumerate(tqdm(data_loader, total=num_batches, desc=f"Processing {config_path.name}")):
             #to_cuda(batch, device='cuda:0')
             batch_cpu = batch
-            batch = {key: to_cuda(value, device='cuda:0') for key, value in batch.items()}
+            batch = {key: to_cuda(value, device='cuda:0') if isinstance(value, torch.Tensor) else value for key, value in batch.items() }
 
-            outputs = experiment.validation_step(batch, i)
+            with torch.inference_mode():
+                outputs = experiment.validation_step(batch, i)
 
+            outputs['batch']['class_name'] = torch.tensor([class_map[i] for i in outputs['batch']['class_name']], device='cuda:0')
+            redshift = torch.tensor([experiment.data.dataset.meta_data['REDSHIFT_FINAL'][raw_idx] for raw_idx in outputs['batch']['raw_idx']], device='cuda:0')
+            snid = torch.tensor([experiment.data.dataset.meta_data['SNID'][raw_idx] for raw_idx in outputs['batch']['raw_idx']], device='cuda:0')
+
+            outputs['batch']['redshift'] = redshift
+            outputs['batch']['snid'] = snid
             outputs = flatten_dict(outputs)
 
             batch_stem = f"{cfg['logging_params']['name']}_{i}"
 
-            save(outputs, f"{batch_stem}_outputs.safetensors")
+            save(outputs, config_path/f"{batch_stem}_outputs.safetensors")
+            #save(batch, config_path/f"{batch_stem}_batch.safetensors")
 
-            resid = percentile_forecast(experiment, batch)
-            resid = flatten_dict(resid)
+            #resid = percentile_forecast(experiment, batch)
+            #resid = flatten_dict(resid)
 
-            print(resid.keys)
-            save(resid, f"{batch_stem}_resid_{i}.safetensors")
+            #print(resid.keys)
+            #save(resid, f"{batch_stem}_resid_{i}.safetensors")
         #if self.metrics is not None:
         #    metrics = self.metrics(outputs[0])
         #    for metric in metrics:

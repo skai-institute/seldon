@@ -94,7 +94,7 @@ class GRUVAEExperiment(Experiment):
                 self.best_val = 1e32
 
         if val_loss.item() < self.best_val:
-            if self.current_epoch < 10:
+            if self.current_epoch < 0:
                 return
             else:
                 print("Plotting Validation Batch")

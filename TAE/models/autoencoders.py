@@ -205,17 +205,16 @@ class BandAwareAutoencoder(nn.Module):
 
         z_mean=out["z_mean"]
         z_var=out["z_var"]
-        weight = batch["class_weight"]
 
         reconstruction_loss = self.recon_loss(out, batch)
         kl = self.variational_component.kl_divergence(z_mean, z_var)
 
         total_loss = (
-            torch.mean(reconstruction_loss*weight) + self.kl_weight * kl
+            torch.mean(reconstruction_loss) + self.kl_weight * kl
         )
 
         return {"loss": total_loss, 'squared_error': reconstruction_loss, 
-                'kl_divergence': kl, "reconstruction_loss":torch.mean(reconstruction_loss*weight)}
+                'kl_divergence': kl, "reconstruction_loss":torch.mean(reconstruction_loss)}
 
     def training_step(self, batch, batch_idx):
 

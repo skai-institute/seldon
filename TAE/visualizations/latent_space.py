@@ -50,6 +50,8 @@ def plot_latents(output,
             loss_np = np.sqrt(loss+ 1e-6)
     else:
         loss_np = output['batch'][color_by].detach().cpu().numpy()
+        if loss_scale == 'log10':
+            loss_np = np.log10(loss_np)
 
     # Dimensionality reduction
     if method == "pca":

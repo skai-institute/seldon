@@ -18,7 +18,7 @@ version = 25
 logdir = Path('/scratch/jackob/logs/BandAwareGRUVAE')
 config_path = logdir / f'version_{version}'
 
-def load_model(config_path):
+def load_model(config_path, device='cuda'):
     config_path = Path(config_path)
 
 
@@ -53,8 +53,9 @@ def load_model(config_path):
                                     model=model,
                                     data=data,
                                     params=cfg["exp_params"]["config"]["params"]);
-    model.cuda()
-    experiment.cuda()
+    if device == 'cuda':
+        model.cuda()
+        experiment.cuda()
 
     data_loader = experiment.data.val_dataloader()
 

@@ -245,7 +245,11 @@ class RecurrentODEEncoder(nn.Module):
                  embed_flux_error=False,
                  embed_meta_data=False,
                  bias=True,
-                 use_hyper_integrator=False):
+                 use_hyper_integrator=False,
+                 atol=1.0, rtol=1.0, pcoeff=0.2, icoeff=0.5, 
+                 dcoeff=0.0, dt_max=0.5, dt_min=0.0,
+                 use_fixed_solver=False,
+                 scale_embedding_grad_by_freq: bool = False):
         """
         Args:
             input_dim: number of input features (e.g., time + normalized flux + dummy 1)
@@ -266,12 +270,13 @@ class RecurrentODEEncoder(nn.Module):
         self.embed_flux_error = embed_flux_error
         self.embed_meta_data = embed_meta_data
         self.use_hyper_integrator = use_hyper_integrator
+        self.use_fixed_solver = use_fixed_solver
 
         if embed_meta_data and not embed_flux_error:
             import sys
             print("WARNING: embed_meta_data is True but embed_flux_error is False, will not perform any embedding")
 
-        self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM, scale_grad_by_freq=False)
+        self.band_emb = nn.Embedding(NUM_BANDS, BAND_EMB_DIM, scale_grad_by_freq=scale_embedding_grad_by_freq)
         emb_inputs = input_dim + BAND_EMB_DIM
         if self.embed_meta_data:
             self.detection_embedding = nn.Embedding(2, 2)
@@ -288,7 +293,10 @@ class RecurrentODEEncoder(nn.Module):
             nlayers=nlayers,
             norm=norm,
             activation=activation_ode,
-            use_hyper_integrator=use_hyper_integrator
+            use_hyper_integrator=use_hyper_integrator,
+            atol=atol, rtol=rtol, pcoeff=pcoeff, icoeff=icoeff, 
+            dcoeff=dcoeff, dt_max=dt_max, dt_min=dt_min,
+            use_fixed_solver=use_fixed_solver
         )
         #self.rnn = torch.compile(self.rnn)
 
@@ -318,6 +326,7 @@ class RecurrentODEEncoder(nn.Module):
             self.compile(mode='max-autotune-no-cudagraphs')
 
 
+    @torch.jit.export
     def forward(self, x, band_idx, mask, time_sorted=None, sequence_batch_mask=None):
         """
         Args:
@@ -372,7 +381,10 @@ class RecurrentODEEncoder(nn.Module):
         #return h_n
 
         if self.aggregate_with_deepsets:
-            _, zs = self.to_latent_timeseries(t_scale*self.t_grid, h_n) # (B, S, E)
+            if self.N_points == 1:
+                zs = h_n[:, None, :]
+            else:
+                _, zs = self.to_latent_timeseries(t_scale*self.t_grid, h_n) # (B, S, E)
             # concat the time points!
             zs = torch.cat((zs, t_scale*self.t_grid.expand(zs.shape[0], -1)[:, :, None]), dim=-1)
             z = self.deepset(zs) # (B, H)

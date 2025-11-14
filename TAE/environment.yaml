@@ -4,7 +4,7 @@ channels:
   - http://ssb.stsci.edu/astroconda
 dependencies:
   - python=3.9
-  - pytorch=2.7.1=cuda129_generic_py39_h8a31f19_204
+  - pytorch=2.7.1
   - lightning=2.5.2
   - lightning-bolts=0.7.0
   - lightning-utilities=0.15.2

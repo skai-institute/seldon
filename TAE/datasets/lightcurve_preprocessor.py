@@ -133,7 +133,6 @@ class LightCurvePreprocessor(Dataset):
             pad_length = 0
             #print(pad_length)
             #import pdb; pdb.set_trace()
-
         output = {
             "light_curve": torch.from_numpy(np.pad(light_curve, ((0, pad_length), (0,0)), mode='edge')),
             "band_indices": torch.from_numpy(np.pad(band_indices, (0, pad_length))),
