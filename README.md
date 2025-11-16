@@ -1,3 +1,3 @@
-# Transient-Auto-Encoder
+# SELDON: Supernova Explosions Learned by Deep ODE Networks
 
-10.5281/zenodo.17612189
+
