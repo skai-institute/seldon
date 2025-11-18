@@ -2,7 +2,13 @@
 
 ![SELDON architecture](SELDON.png)
 
-Welcome! This is the code companion to **“SELDON: Supernova Explosions Learned by Deep ODE Networks”** (Jiezhong Wu, Jack O’Brien, Jennifer Li, M. S. Krafczyk, Ved G. Shah, Amanda R. Wasserman, Daniel W. Apley, Gautham Narayan, Noelle I. Samia; to appear at AAAI 2026). We’re excited for you to explore the model—check out the architecture above, then dive into the code. SELDON blends neural ODE encoders with a band-aware decoder to reconstruct, interpolate, and forecast multi-band flux from irregular observations. Everything is Hydra-driven, with ready-to-run data loaders, models, experiments, and analysis scripts—jump in and try it!
+Welcome! This is the code companion to  
+**“SELDON: Supernova Explosions Learned by Deep ODE Networks”**  
+(Jiezhong Wu, Jack O’Brien, Jennifer Li, M. S. Krafczyk, Ved G. Shah, Amanda R. Wasserman, Daniel W. Apley, Gautham Narayan, Noelle I. Samia; to appear at AAAI 2026).
+
+📄 **Paper:** [SELDONI.pdf](SELDONI.pdf)
+
+We’re excited for you to explore the model—check out the architecture above, then dive into the code. SELDON blends neural ODE encoders with a band-aware decoder to reconstruct, interpolate, and forecast multi-band flux from irregular observations. Everything is Hydra-driven, with ready-to-run data loaders, models, experiments, and analysis scripts—jump in and try it!
 
 ## Features
 - Neural ODE encoder for irregular, multi-band light-curve sequences with variational latent space.
