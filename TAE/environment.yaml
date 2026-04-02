@@ -24,7 +24,7 @@ dependencies:
   - h5py
   - pip
   - pip:
-    - umap
+    - umap-learn
     - requests
     - torch_optimizer
     - git+https://github.com/martenlienen/torchode
