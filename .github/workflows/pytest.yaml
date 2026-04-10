@@ -1,0 +1,44 @@
+name: Run Pytest (Conda)
+
+on:
+  pull_request:
+    branches: [ fine_parameter_control ]
+
+env:
+  # This is necessary to use the latest version of Node.js in the GitHub Actions runner.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          python-version: 3.9
+          # The following line is the name of the environment that will be created
+          # in the conda environment using the environment.yml file. The environment
+          # will be automatically activated in the following steps.
+          activate-environment: tae
+          environment-file: TAE/environment.yaml
+          # Do not activate the base conda environment.
+          auto-activate: false
+          # Remove the implicit 'defaults' channel since explicit channels are
+          # specified in the environment.yaml file.
+          conda-remove-defaults: true
+
+      - name: Install pytest (if not in environment.yaml)
+        # Since GitHub Actions runs each step in a new shell, we need to use bash -l {0}
+        # to run commands in the same shell as the conda environment was activated.
+        # So do not remove the line below or similar lines in subsequent steps.
+        shell: bash -l {0}
+        run: conda install pytest
+
+      - name: Run tests
+        shell: bash -l {0}
+        run: pytest -v
