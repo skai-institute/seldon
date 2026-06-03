@@ -2,7 +2,7 @@ name: Run Pytest (Conda)
 
 on:
   pull_request:
-    branches: [ fine_parameter_control ]
+    branches: [ main, fine_parameter_control ]
 
 env:
   # This is necessary to use the latest version of Node.js in the GitHub Actions runner.
