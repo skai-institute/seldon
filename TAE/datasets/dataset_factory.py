@@ -2,8 +2,8 @@ import typing
 
 from TAE.datasets.YSE_json_dataset import JSONDataLoader
 
-# from TAE.datasets.datasets import RandomData
 from TAE.datasets.lightcurve_dataset import SNDataModule
+from TAE.datasets.lightcurve_dataloader2 import FlexibleLightCurveDataLoader
 from TAE.datasets.lightcurve_dataset_parquet import SNDataModuleParquet
 from TAE.datasets.lightcurve_dataloader import LightCurveDataLoader
 from TAE.util import extract_curves_from_filtered_data

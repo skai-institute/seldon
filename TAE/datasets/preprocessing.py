@@ -3,6 +3,8 @@ Module for various pre-processing classes for the light curve datasets
 '''
 
 import numpy as np
+import torch
+import torch.distributions as tdist
 from functools import reduce
 from TAE.util import register_module
 
@@ -125,25 +127,98 @@ class IndexAugmentationPipeline(IndexAugmentation):
         return augmentation_index
     
 
+class GumbelTransform:
+
+    def __init__(self, mu, beta):
+
+        self.mu = mu
+        self.beta = beta
+        self.dist = tdist.Gumbel(loc=mu, scale=beta)
+
+    def get_module(self, data):
+
+        if isinstance(data, torch.Tensor):
+            mod = torch
+        else:
+            mod = np
+        return mod
+
+    def transform(self, data, error=None):
+        mod = self.get_module(data)
+        if mod == torch:
+            data_ = data
+            error_ = error
+        else:
+            data_ = torch.from_numpy(data)
+            error_ = torch.from_numpy(error)
+
+        new_data = self.dist.cdf(data_)
+        if mod == np:
+            new_data = new_data.numpy()
+        if error is not None:
+            #dx = self.dist.log_prob(data_)
+            #new_error = mod.exp(mod.log(error_) + dx)
+            new_error = self.dist.cdf(data_ - error_)
+            if mod == np:
+                new_error = new_error.numpy()
+            return new_data, new_error
+        return new_data
+
+    def inverse_transform(self, data, error=None):
+
+        mod = self.get_module(data)
+        if mod == torch:
+            data_ = data
+            error_ = error
+        else:
+            data_ = torch.from_numpy(data)
+            error_ = torch.from_numpy(error)
+
+        new_data = self.dist.icdf(data_)
+        if mod == np:
+            new_data = new_data.numpy()
+        if error is not None:
+            #dx = -self.beta / (data_ * mod.log(data_))
+            #new_error = mod.sqrt((error_ * dx)**2)
+            new_error = new_data - self.dist.icdf(error_)
+            if mod == np:
+                new_error = new_error.numpy()
+            return new_data, new_error
+        
+        return new_data
+
+
+
+
 class SemilogTransform:
 
     def __init__(self):
 
         pass
 
-    def transform(self, data, error=None):
+    def get_module(self, data):
 
-        new_data = np.sign(data) * np.log10(1 + np.abs(data))
+        if isinstance(data, torch.Tensor):
+            mod = torch
+        else:
+            mod = np
+        return mod
+
+    def transform(self, data, error=None):
+        mod = self.get_module(data)
+
+        new_data = mod.sign(data) * mod.log10(1 + mod.abs(data))
         if error is not None:
-            new_error = error / (np.abs(data) + 1) / np.log(10)
+            new_error = error / (mod.abs(data) + 1) / np.log(10)
             return new_data, new_error
         return new_data
     
     def inverse_transform(self, transformed_data, error=None):
+        mod = self.get_module(transformed_data)
 
-        new_data = np.sign(transformed_data) * (10**(np.abs(transformed_data)) - 1)
+        new_data = mod.sign(transformed_data) * (10**(mod.abs(transformed_data)) - 1)
         if error is not None:
-            new_error = error * (np.abs(new_data) + 1) * np.log(10)
+            new_error = error * (mod.abs(new_data) + 1) * np.log(10)
             return new_data, new_error
         return new_data
     
@@ -168,3 +243,29 @@ class MaxTransform:
             new_error = error * self.max_value
             return new_data, new_error
         return new_data
+
+class TransformPipeline:
+
+    def __init__(self, *transforms):
+
+        self.transforms = transforms
+
+    def transform(self, data, error=None):
+
+        for transform in self.transforms:
+            output = transform.transform(data, error)
+            if isinstance(output, tuple):
+                data, error = output
+            else:
+                data = output
+        return output
+    
+    def inverse_transform(self, data, error=None):
+
+        for transform in self.transforms[::-1]:
+            output = transform.inverse_transform(data, error)
+            if isinstance(output, tuple):
+                data, error = output
+            else:
+                data = output
+        return output

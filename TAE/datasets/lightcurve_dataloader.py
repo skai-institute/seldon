@@ -1,8 +1,9 @@
 import pickle
 import numpy as np
 import torch
+import sys
 from collections import defaultdict
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 from torch.utils.data import TensorDataset, DataLoader, Dataset, random_split
 from pathlib import Path
 from tqdm import tqdm
@@ -29,6 +30,7 @@ class LightCurveDataLoader(pl.LightningDataModule):
     def __init__(
         self,
         lightcurve_path=".",
+        fine_tune_data=None,
         class_filter=None,
         min_points=5,
         max_points=100,
@@ -66,13 +68,13 @@ class LightCurveDataLoader(pl.LightningDataModule):
         self.zero_non_detections = zero_non_detections
         self.pin_memory = pin_memory
         self.balance_class_samples = balance_class_samples
+        self.fine_tune_data = fine_tune_data
+        self.is_set_up = False
         if self.zero_non_detections and not include_non_detections:
-            import sys
             print("WARNING: zero_non_detections is True but non-detections are not used", file=sys.stderr)
             self.zero_non_detection = True
         if include_non_detections:
             if mode != "parquet":
-                import sys
                 print("WARNING: include_non_detect only works with mode='parquet', ignoring", file=sys.stderr)
         
         if augmentations is not None:
@@ -80,6 +82,7 @@ class LightCurveDataLoader(pl.LightningDataModule):
             kwargs.update({"augmentations": augmentations})
 
         self.kwargs = kwargs
+        
 
     def load_data(self):
 
@@ -94,10 +97,29 @@ class LightCurveDataLoader(pl.LightningDataModule):
             self.full_class_names = full_class_names #self.manager.list(full_class_names)
 
         elif self.mode == 'parquet':
-            df = pd.read_parquet(self.lightcurve_path, columns=['ELASTICC_class','MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG', 'REDSHIFT_FINAL', "SNID"])
-            df['class'] = df['ELASTICC_class'].map(ELAsTiCC_to_Astrophysical_mappings)
+            try:
+                df = pd.read_parquet(self.lightcurve_path, columns=['ELASTICC_class','MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG', 'REDSHIFT_FINAL', "SNID"])
+            except: # If a redshift columns does not exist, set all of them to missing
+                try:
+                    df = pd.read_parquet(self.lightcurve_path, columns=['class','MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG'])
+                    df['REDSHIFT_FINAL'] = -9
+                    df['SNID'] = np.arange(len(df))
+                    df['ELASTICC_class'] = None
+                except:
+                    df = pd.read_parquet(self.lightcurve_path, columns=['MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG'])
+                    df['REDSHIFT_FINAL'] = -9
+                    df['SNID'] = np.arange(len(df))
+                    df['ELASTICC_class'] = None
+                    df['class'] = "Unknown"
+
+            if (df['ELASTICC_class'].isnull()).any() and 'class' in df.columns:
+                pass
+            else:
+                df['class'] = df['ELASTICC_class'].map(ELAsTiCC_to_Astrophysical_mappings)
             if self.class_filter is not None:
                 df = df[df['class'].isin(tuple(self.class_filter))]
+            else:
+                print(f"No Class Filter Provided, extracting all classes: {len(df)} entries found", file=sys.stderr)
 
             detection_flag = 4096
             first_detection_flag = 2048
@@ -105,6 +127,7 @@ class LightCurveDataLoader(pl.LightningDataModule):
             saturation_flag = 1024 
 
             def include_point(f, include_non_detections=self.include_non_detections):
+                f = f.astype(np.uint32)
                 if include_non_detections:
                     return (f & saturation_flag) ^ saturation_flag
                 else:
@@ -112,7 +135,10 @@ class LightCurveDataLoader(pl.LightningDataModule):
             
             flags = df['PHOTFLAG'].to_numpy()
             df['nobs'] = [int(np.count_nonzero(include_point(np.asarray(f), False).astype(bool))) for f in flags]
+            max_obs = df['nobs'].max()
             df = df[df['nobs'] >= self.min_points]
+            print(f'Found {len(df)} entries with more than {self.min_points} detections', file=sys.stderr)
+            print(f'Largest number of detections was {max_obs}', file=sys.stderr)
 
             kept_flags = [include_point(np.asarray(f)).astype(bool) for f in df['PHOTFLAG'].to_numpy()]
 
@@ -131,12 +157,16 @@ class LightCurveDataLoader(pl.LightningDataModule):
             df['detection_flag_clean']   = [np.asarray(x)[m0] > 0 for x,  m0 in zip(PHOTFLAG_arr,    kept_flags)]
 
             if not self.group_classes:
-                df['class'] = df['ELASTICC_class']
+                if (df['ELASTICC_class'].isnull()).any() and 'class' in df.columns:
+                    pass
+                else:
+                    df['class'] = df['ELASTICC_class']
 
             df = df.drop(columns=['ELASTICC_class','MJD','FLUXCAL','FLUXCALERR','BAND'])
 
             self.full_light_curves = df
             self.full_class_names = df['class'].to_list() #self.manager.list(df['class'].to_list())
+            assert len(self.full_light_curves), f"No Valid Light Curves Found:{df}\nPHOTFLAGS was {flags}\ninclude_non_detections was {self.include_non_detections}"
 
 
         else:
@@ -144,12 +174,25 @@ class LightCurveDataLoader(pl.LightningDataModule):
         
     def setup(self, *args, **kwargs):
 
+        if self.is_set_up:
+            return
+
         self.load_data()
         self.init_class_weights()
         self.init_light_curves()
         self.init_band_index()
         self.init_meta_data()
         self.init_data_stats()
+        if self.fine_tune_data is not None:
+            self.lightcurve_path = self.fine_tune_data
+            self.class_filter = None
+            self.batch_size=32
+            self.load_data()
+            self.init_class_weights()
+            self.init_light_curves()
+            self.init_band_index()
+            self.init_meta_data()
+
         
 
         self.dataset = LightCurvePreprocessor(        
@@ -176,12 +219,13 @@ class LightCurveDataLoader(pl.LightningDataModule):
             [train_size, val_size, test_size],
             generator=torch.Generator().manual_seed(42),
         )
+        self.is_set_up = True
         
     def init_class_weights(self):
 
         print("Weighting Classes...")
         self.class_label_names = []#self.manager.list()
-        self.class_label_names.extend(list(set(self.full_class_names)))
+        self.class_label_names.extend(sorted(list(set(self.full_class_names))))
 
         self.class_map = {}#self.manager.dict()
         self.class_map.update(dict(zip(self.class_label_names, range(len(self.class_label_names)))))
@@ -240,7 +284,7 @@ class LightCurveDataLoader(pl.LightningDataModule):
         elif self.mode == 'pickle':
             columns = ["days_since_first_observation", "FLUXCAL", "FLUXCALERR"]
             self.full_light_curve_array = [
-                df[columns].astype(np.float32).reset_index(drop=True).values
+                df[columns].astype(np.float32).reset_index(drop=True).to_numpy(copy=True)
                 for df in tqdm(self.full_light_curves, desc="Extracting LCs") if len(df) >= self.min_points
             ]
         else:
@@ -272,7 +316,7 @@ class LightCurveDataLoader(pl.LightningDataModule):
             ]
 
         all_bands = np.hstack(self.band_array)
-        bin_counts = np.bincount(all_bands)
+        bin_counts = np.bincount(all_bands, minlength=6)
         self.band_weights = {} #self.manager.dict()
         self.band_weights.update({key: len(all_bands)/bin_counts[key]/6 for key in range(6)})
         print("Found Band Weighting")
@@ -330,7 +374,7 @@ class LightCurveDataLoader(pl.LightningDataModule):
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers,
             prefetch_factor=self.prefetch_factor,
-            drop_last=False,
+            drop_last=True,
         )
 
     def test_dataloader(self):
@@ -343,7 +387,7 @@ class LightCurveDataLoader(pl.LightningDataModule):
             pin_memory=False,
             persistent_workers=False,
             prefetch_factor=None,
-            drop_last=True,
+            drop_last=False,
         )
     
 def test():

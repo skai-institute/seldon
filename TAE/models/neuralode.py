@@ -6,15 +6,16 @@ import torch.nn.functional as F
 from torchdiffeq import odeint_adjoint as odeint
 import torchode as tode
 
-
+@register_module
 class ODESolver(nn.Module):
 
-    def __init__(self, ode_net, atol=1.0, rtol=1.0, pcoeff=0.2, icoeff=0.5, 
-            dcoeff=0.0, dt_max=0.5, dt_min=0.0, use_fixed_solver=False):
+    def __init__(self, ode_net, atol=1e-6, rtol=1e-3, pcoeff=0.2, icoeff=0.5, 
+            dcoeff=0.0, dt_max=0.5, dt_min=0.0, use_fixed_solver=False, fixed_solver_steps=1):
 
         super().__init__()
 
         self.ode_net = ode_net
+        self.fixed_solver_steps = fixed_solver_steps
         self.use_fixed_solver = use_fixed_solver
         self.term = tode.ODETerm(self.ode_net)
         self.step_method = tode.Tsit5(self.term)
@@ -31,6 +32,7 @@ class ODESolver(nn.Module):
                                            backprop_through_step_size_control=True)
         #self.solver = tode.BacksolveAdjoint(self.term, self.step_method, self.step_size_controller)
         #self.jit_solver = torch.compile(self.solver)
+        self.compile(mode='max-autotune-no-cudagraphs')
         
 
     @torch.jit.export
@@ -38,12 +40,14 @@ class ODESolver(nn.Module):
         
         if self.use_fixed_solver:
             if t_eval is None:
-                dt0 = t_end-t_start
+                dt0 = (t_end-t_start)/self.fixed_solver_steps
             else:
-                dt0 = (t_eval[:, -1] - t_eval[:, 0])
+                dt0 = (t_eval[:, -1] - t_eval[:, 0])/self.fixed_solver_steps
 
             sol = self.solver.solve(tode.InitialValueProblem(y0=x, t_eval=t_eval, t_start=t_start, t_end=t_end), dt0=dt0)
         else:
+            if t_start is not None and t_end is not None:
+                t_end = torch.where((t_start == t_end), t_end + (t_start == t_end) * 1e-3, t_end) # prevents fixed solver from breaking
             sol = self.solver.solve(tode.InitialValueProblem(y0=x, t_eval=t_eval, t_start=t_start, t_end=t_end))
 
         return sol.ts, sol.ys
@@ -109,6 +113,180 @@ class HyperODESolver(nn.Module):
         #print(solution.shape, file=sys.stderr)
         return time, solution
 
+@register_module
+class RNNODECell(nn.Module):
+
+    def __init__(self, rnn_cell, ode_solver):
+        # NOTE: This will have issues when not using the fixed solver as it will not check if integrating from t0=t1
+
+        super().__init__()
+
+        self.rnn_cell = rnn_cell
+        self.ode_solver = ode_solver
+
+        self.hidden_size = self.rnn_cell.hidden_size
+        self.input_size = self.rnn_cell.input_size
+
+    #@torch.jit.export
+    def forward(self, x0, x1, t0, t1, mask0, mask1, hx=None):
+        # RNNUpdate and ODE Intgrate from t0 to t1
+        # x0, x1: (batch_size x num_features)
+        # t0, t1: (batch_size)
+        # mask0, mask1: (batch_size)
+
+        batch_size = x0.size(0)
+        if hx is None:
+            hx = torch.zeros(batch_size, self.hidden_size, device=x0.device)
+  
+        hx = torch.where((t0 == t1)[..., None], hx, self.ode_solver(hx, t_start=t0, t_end=t1)[1][..., -1, :])
+        hx = torch.where(mask1[..., None], self.rnn_cell(x1, hx), hx)
+
+        return hx
+
+register_module(nn.GRUCell)
+register_module(nn.RNNCell)
+
+@register_module
+class LNGRUCell(nn.Module):
+    def __init__(self, input_size, hidden_size, bias=True):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+
+        self.W = nn.Linear(input_size, 3 * hidden_size, bias=bias)
+        self.U = nn.Linear(hidden_size, 3 * hidden_size, bias=bias)
+
+        self.ln_x = nn.LayerNorm(3 * hidden_size)
+        self.ln_h = nn.LayerNorm(3 * hidden_size)
+
+        self.bias = nn.Parameter(torch.zeros(3 * hidden_size, requires_grad=True))
+
+        self.sz = nn.Sigmoid()
+        self.sr = nn.Sigmoid()
+        self.tanh = nn.Tanh()
+
+    @torch.jit.export
+    def forward(self, input, hx):
+        x_proj = self.ln_x(self.W(input))
+        h_proj = self.ln_h(self.U(hx))
+
+        preact = x_proj + h_proj + self.bias
+
+        z_, r_, n_ = preact.chunk(3, dim=-1)
+
+        z = self.sz(z_)
+        r = self.sr(r_)
+        n = self.tanh(n_ + r * h_proj[:, 2*self.hidden_size:])
+
+        h_new = (1 - z) * hx + z * n
+        return h_new
+
+@register_module
+class RNNODEEncoderV2(nn.Module):
+
+    def __init__(self, rnn_ode_cell, use_class_token=False):
+
+        super().__init__()
+        self.rnn_ode_cell = rnn_ode_cell
+        self.integrator = rnn_ode_cell.ode_solver
+        self.hidden_size = self.rnn_ode_cell.hidden_size
+        self.use_class_token = use_class_token
+
+        if self.use_class_token:
+            self.class_token = nn.Parameter(torch.randn(1, self.hidden_size, requires_grad=True))
+        else:
+            self.class_token = 0
+
+    @torch.jit.export
+    def forward(self, x, t, mask, hx=None, reverse=True):
+
+        # RNNUpdate and ODE Intgrate from t0 to t1
+        # x: (batch_size x sequence_length x num_features)
+        # t: (batch_size x sequence_length)
+        # mask: (batch_size x sequence_length)
+
+        batch_size, sequence_length, *_ = x.size()
+        
+        if hx is None:
+            hx = torch.zeros(batch_size, self.hidden_size, device=x.device) + self.class_token
+
+        if reverse:
+            x0, x1, t0, t1, mask0, mask1 = x[..., 1:, :], x[..., :-1, :], t[..., 1:], t[..., :-1], mask[..., 1:], mask[..., :-1]
+        else:
+            x0, x1, t0, t1, mask0, mask1 = x[..., :-1, :], x[..., 1:, :], t[..., :-1], t[..., 1:], mask[..., :-1], mask[..., 1:]
+
+
+        h_t_minus_1 = hx.clone()
+        h_t = hx.clone()
+        outputs = []
+        i = 0
+        if reverse: i = sequence_length - 1 - i
+        h_t = torch.where(mask[..., i, None], self.rnn_ode_cell.rnn_cell(x[..., i, :], hx=h_t_minus_1),  h_t_minus_1)
+        outputs.append(h_t.clone())
+        h_t_minus_1 = h_t.clone()
+
+        for i in range(sequence_length - 1):
+            if reverse: i = sequence_length - 2 - i
+            h_t = self.rnn_ode_cell(x0[..., i, :], x1[..., i, :], t0[..., i], t1[..., i], mask0[..., i], mask1[..., i], hx=h_t_minus_1)
+            outputs.append(h_t.clone())
+            h_t_minus_1 = h_t.clone()
+
+        outputs = torch.stack(outputs)
+        outputs = outputs.transpose(0, 1).contiguous()
+
+        return outputs, h_t
+
+
+@register_module
+class VariationalODERNN(nn.Module):
+
+    def __init__(self, rnn_ode_cell, autoencoder):
+
+        super().__init__()
+        self.rnn_ode_cell = rnn_ode_cell
+        self.integrator = rnn_ode_cell.ode_solver
+        self.hidden_size = self.rnn_ode_cell.hidden_size
+        self.autoencoder = autoencoder
+
+    def collate(self, outputs):
+
+        return {key:torch.stack(outputs[key]).transpose(0, 1).contiguous() for key in outputs}
+
+    @torch.jit.export
+    def forward(self, x, t, mask, hx=None, reverse=True):
+
+        # RNNUpdate and ODE Intgrate from t0 to t1
+        # x: (batch_size x sequence_length x num_features)
+        # t: (batch_size x sequence_length)
+        # mask: (batch_size x sequence_length)
+
+        batch_size, sequence_length, *_ = x.size()
+        
+        if hx is None:
+            hx = torch.zeros(batch_size, self.hidden_size, device=x.device)
+
+        if reverse:
+            x0, x1, t0, t1, mask0, mask1 = x[..., 1:, :], x[..., :-1, :], t[..., 1:], t[..., :-1], mask[..., 1:], mask[..., :-1]
+        else:
+            x0, x1, t0, t1, mask0, mask1 = x[..., :-1, :], x[..., 1:, :], t[..., :-1], t[..., 1:], mask[..., :-1], mask[..., 1:]
+
+        outputs = []
+        i = 0
+        if reverse: i = sequence_length - 1 - i
+        h_t = self.autoencoder(torch.where(mask[..., i, None], self.rnn_ode_cell.rnn_cell(x[..., i, :], hx=hx),  hx))
+        
+        outputs.append(h_t)
+        h_t_minus_1 = h_t['output'].clone()
+
+        for i in range(sequence_length - 1):
+            if reverse: i = sequence_length - 2 - i
+            h_t = self.autoencoder(self.rnn_ode_cell(x0[..., i, :], x1[..., i, :], t0[..., i], t1[..., i], mask0[..., i], mask1[..., i], hx=h_t_minus_1))
+            outputs.append(h_t)
+            h_t_minus_1 = h_t['output'].clone()
+
+        outputs = self.collate(outputs)
+
+        return outputs, h_t_minus_1
 
 @register_module
 class RNNODEEncoder(nn.Module):
@@ -125,7 +303,8 @@ class RNNODEEncoder(nn.Module):
                  activation='Softplus',
                  use_hyper_integrator=False,
                  atol=1.0, rtol=1.0, pcoeff=0.2, icoeff=0.5, 
-                 dcoeff=0.0, dt_max=0.5, dt_min=0.0, use_fixed_solver=False):
+                 dcoeff=0.0, dt_max=0.5, dt_min=0.0, use_fixed_solver=False,
+                 use_class_token=False, fixed_solver_steps=1):
 
         super().__init__()
 
@@ -139,6 +318,8 @@ class RNNODEEncoder(nn.Module):
         self.activation = activation
         self.use_hyper_integrator = use_hyper_integrator
         self.use_fixed_solver = use_fixed_solver
+        self.use_class_token = use_class_token
+        self.fixed_solver_steps = fixed_solver_steps
 
         self.rnn_cell = nn.GRUCell(hidden_size, hidden_size, bias=bias, device=device, dtype=dtype)
         if self.use_hyper_integrator:
@@ -157,11 +338,15 @@ class RNNODEEncoder(nn.Module):
                                 activation=activation,
                                 bias=bias)
             self.integrator = ODESolver(self.ode_net, atol=atol, rtol=rtol, pcoeff=pcoeff, icoeff=icoeff, 
-                 dcoeff=dcoeff, dt_max=dt_max, dt_min=dt_min, use_fixed_solver=use_fixed_solver)
+                 dcoeff=dcoeff, dt_max=dt_max, dt_min=dt_min, use_fixed_solver=use_fixed_solver, fixed_solver_steps=self.fixed_solver_steps)
         #self.integrator = odeint
+        if self.use_class_token:
+            self.class_token = nn.Parameter(torch.randn(1, self.hidden_size, requires_grad=True))
+        else:
+            self.class_token = 0
 
     @torch.jit.export
-    def forward(self, x, time, mask, time_sorted=None, sequence_batch_mask=None, hx=None):
+    def forward(self, x, time, mask, hx=None):
         # x is (S, B, E) where E is input_size
         # time is (S, B)
         # Want (S, B) iteration, mask updates at t = batch[time], pre-sort time
@@ -172,9 +357,9 @@ class RNNODEEncoder(nn.Module):
             mask = mask.transpose(0, 1)
         seq_len, batch_size, _ = x.size()
         if hx is None:
-            hx = torch.zeros(batch_size, self.hidden_size, device=x.device)
+            hx = torch.zeros(batch_size, self.hidden_size, device=x.device) + self.class_token
         h_t_minus_1 = hx
-        h_t = hx
+        h_t = hx12957
 
         # TODO: This function is wrong if there is sparse masked points (or band masks!)
         # The h_p's need to be maintained when evolved to masked points in time
@@ -202,6 +387,26 @@ class RNNODEEncoder(nn.Module):
         #return None, h_t
         return output, h_t
    
+
+@register_module
+class ODEModelWrapper(nn.Module):
+
+    '''A wrapper around a neural network to provide an interface to ODE solvers'''
+
+    def __init__(self, model, autonomous=True):
+        super().__init__()
+
+        self.model = model
+        self.autonomous = autonomous
+
+    def forward(self, t, y):
+
+        if self.autonomous:
+            input_data = y
+        else:
+            input_data = torch.cat([t[..., None], y], dim=-1)
+
+        return self.model(input_data)
 
 class ODEFunc(nn.Module):
 

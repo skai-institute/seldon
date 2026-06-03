@@ -94,6 +94,7 @@ class SimpleDeepSet(nn.Module):
         dropout: float = 0.2,
         activation: str = "PReLU",
         norm:bool = False,
+        n_layers:int = 4,
     ):
         super().__init__()
         if pooling not in {"mean", "sum", "max", "all", "attentive"}:
@@ -103,8 +104,8 @@ class SimpleDeepSet(nn.Module):
         self.dropout = dropout
         self.activation = getattr(nn, activation)
         self.phi_out = self.activation()
-        self.phi = ResNet(input_dim, hidden_dim, nlayers=2, nhid=hidden_dim, activation=activation, dropout=dropout, norm=norm)
-        self.rho = ResNet(hidden_dim, hidden_dim, nlayers=2, nhid=hidden_dim, activation=activation, dropout=dropout, norm=norm)
+        self.phi = ResNet(input_dim, hidden_dim, nlayers=n_layers, nhid=hidden_dim, activation=activation, dropout=dropout, norm=norm)
+        self.rho = ResNet(hidden_dim, hidden_dim, nlayers=n_layers, nhid=hidden_dim, activation=activation, dropout=dropout, norm=norm)
         self.pooling = pooling  # commutative aggregation
         if self.pooling == "all":
             self.transform_shapes = nn.Linear(hidden_dim*4, hidden_dim)

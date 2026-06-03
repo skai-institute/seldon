@@ -2,7 +2,7 @@ import typing
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch
 from scipy.stats import gamma
 
@@ -25,6 +25,7 @@ class Experiment(pl.LightningModule):
         self.hold_graph = False
         self.data = data
         self.metrics = metrics
+        self.validation_step_outputs: list = []
         try:
             self.hold_graph = self.params["retain_first_backpass"]
         except KeyError:

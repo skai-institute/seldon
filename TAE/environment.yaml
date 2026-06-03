@@ -3,29 +3,28 @@ channels:
   - conda-forge
   - http://ssb.stsci.edu/astroconda
 dependencies:
-  - python=3.9
+  - python=3.12
+  - pytorch-gpu
   - pytorch=2.7.1
   - lightning=2.5.2
-  - lightning-bolts=0.7.0
-  - lightning-utilities=0.15.2
-  - torchvision
+  # lightning=2.5.2 pulls pytorch-lightning as an unbounded transitive dep;
+  # without >=2 the solver can pick 1.x which uses the removed np.Inf and
+  # rejects modern LR schedulers.
+  - pytorch-lightning>=2
+  - cuda-compiler
   - hydra-core
   - omegaconf
-  - numpy
   - seaborn
   - pandas
   - scipy
-  - astropy
   - scikit-learn
   - matplotlib
   - pyarrow
-  - fastparquet
   - tensorboard
   - h5py
   - pip
   - pip:
-    - umap
-    - requests
+    - umap-learn
     - torch_optimizer
     - git+https://github.com/martenlienen/torchode
     - torchdiffeq

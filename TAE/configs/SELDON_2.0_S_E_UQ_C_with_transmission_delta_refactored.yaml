@@ -1,0 +1,460 @@
+dataset:
+  name: FlexibleLightCurveDataLoader
+  config:
+    #lightcurve_path: /projects/ncsa/caps/skai/data/YSE_DR1.parquet
+    lightcurve_path: 
+      - /projects/ncsa/caps/skai/data/ELAsTiCC/complete.parquet
+      - /projects/ncsa/caps/skai/data/roman.parquet
+      #- /projects/ncsa/caps/skai/data/ZTF_DR2.parquet
+      #- /projects/ncsa/caps/skai/data/CSPII_DR3.parquet
+      #- /projects/ncsa/caps/skai/data/YSE_DR1.parquet
+      #- /projects/ncsa/caps/skai/data/ComCam.parquet
+      #- /projects/ncsa/caps/skai/data/jwst.parquet
+    fine_tune_data: null
+    zero_point_flux: 1
+    class_mapping:
+      "snia-cosmo-norm" : "SNIa"
+      "snia" : "SNIa"
+      "snia-cosmo-91t" : "SNIa"
+      "snia-pec-03fg" : "SNIa"
+      "snia-cosmo-norm/99aa" : "SNIa"
+      "snia-cosmo-norm/04gs" : "SNIa"
+      "snia-pec-91bg" : "SNIa"
+      "snia-cosmo-99aa/91t" : "SNIa"
+      "snia-cosmo-99aa" : "SNIa"
+      "snia-pec-02es" : "SNIa"
+      "snia-pec-iax" : "SNIax"
+      "snia-pec-csm" : "SNIa"
+      "snia-pec-00cx" : "SNIa"
+      "snia-pec-19yvq" : "SNIa"
+      "snia-91bg/86G" : "SNIa"
+      "snia-pec-18byg" : "SNIa"
+      "SNIa" : "SNIa"
+      "SN Ibn" : "SNIb/c"
+      "SN Ic" : "SNIb/c"
+      "NA" : "Unknown"
+      "SN Ia-norm" : "SNIa"
+      "SN Ia-91T-like" : "SNIa"
+      "SN II" : "SNII"
+      "TDE" : "TDE"
+      "SN IIb" : "SNIIb"
+      "SN IIn" : "SNIIn"
+      "SN Ia-CSM" : "SNIa"
+      "SN Ia-SC" : "SNIa"
+      "SN" : "SN"
+      "LBV" : "LBV"
+      "SN Ib" : "SNIb/c"
+      "Other" : "Unknown"
+      "SN Ic-BL" : "SNIb/c"
+      "LRN" : "LRN"
+      "SN Iax" : "SNIax"
+      "SN Ia-91bg-like" : "SNIa"
+      "SLSN-II" : "SLSN"
+      "SLSN-I" : "SLSN"
+      "SN Ib-pec" : "SNIb/c"
+      "Unknown" : "Unknown"
+      "CCSN" : "CCSN"
+      "SNIa-91bg" : "SNIa"
+      "SNIax" : "SNIax"
+      "ILOT" : "ILOT"
+      "KN" : "KN"
+      "PISN" : "PISN"
+      "AGN" : "AGN"
+      "Fixedmag" : "Unknown"
+      "SNII-NMF" : "SNII"
+      "SNIc-Templates" : "SNIb/c"
+      "CART" : "CART"
+      "EB" : "EB"
+      "SNIc+HostXT_V19" : "SNIb/c"
+      "d-Sct" : "Delta Scuti"
+      "SNIb-Templates" : "SNIb/c"
+      "SNIIb+HostXT_V19" : "SNIIb"
+      "SNIcBL+HostXT_V19" : "SNIb/c"
+      "CLAGN" : "AGN"
+      "Cepheid" : "Cepheid"
+      "SLSN-I+host" : "SLSN"
+      "SNIIn-MOSFIT" : "SNIIn"
+      "SNII+HostXT_V19" : "SNII"
+      "SLSN-I_no_host" : "SLSN"
+      "SNII-Templates" : "SNII"
+      "SNIa-SALT3" : "SNIa"
+      "KN_K17" : "KN"
+      "SNIIn+HostXT_V19" : "SNIIn"
+      "dwarf-nova" : "Dwarf Novae"
+      "uLens-Binary" : "uLens"
+      "RRL" : "RR Lyrae"
+      "Mdwarf-flare" : "M-dwarf Flare"
+      "KN_B19" : "KN"
+      "uLens-Single-GenLens" : "uLens"
+      "SNIb+HostXT_V19" : "SNIb/c"
+      "uLens-Single_PyLIMA" : "uLens"
+      "SNIb/c" : "SNIb/c"
+      "SNII" : "SNII"
+      "SLSN" : "SLSN"
+      "Delta Scuti" : "Delta Scuti"
+      "SNIIb" : "SNIIb"
+      "SNIIn" : "SNIIn"
+      "Dwarf Novae" : "Dwarf Novae"
+      "uLens" : "uLens"
+      "RR Lyrae" : "RR Lyrae"
+      "M-dwarf Flare" : "M-dwarf Flare"
+    class_filter: 
+      - 'SNIa'        
+      - 'SNII'
+      - 'SNIIb'
+      - 'SNIIn'
+      - 'SNIb/c'
+      - 'SNIax'
+    #  - 'Unknown'
+    #  - 'SN91bg'
+    #  - 'SLSN'
+    #  - 'KN'
+    #  - 'CART'
+    #  - 'ILOT'
+    #  - 'PISN'
+    flux_normalization: minmax
+    time_normalization: std
+    min_points: 64
+    max_points: 256
+    max_length: 256
+    augmentations: 
+      - FullSample
+      - CutOffSample
+      #- BandSample
+      #- CutOnSample
+      #- SparseSample
+    batch_size: 512
+    num_workers: 16
+    mode: parquet
+    #test_run: False
+    t_max: 20.0
+    resample: False
+    include_non_detections: True
+    include_meta_data: True
+    t_offset: 0.0
+    group_classes: True
+    zero_non_detections: False
+    pin_memory: True
+    force_zero_non_detections: False
+    #min_obs_fraction: 0.0
+
+global_params:
+  hidden_size: &hidden_size 128
+  latent_dim: &latent_dim 12
+  dropout: &dropout 0.0
+  sed_size: &sed_size 2048
+  ode_size: &ode_size 128
+
+transmission_filters: &transmission_filters
+  u: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/total_u.dat"
+  g: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/total_g.dat"
+  r: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/total_r.dat"
+  i: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/total_i.dat"
+  z: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/total_z.dat"
+  y: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/total_y.dat"
+  F470N: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f470n.dat
+  F300M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f300m.dat
+  F164N: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f164n.dat
+  F200W: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f200w.dat
+  F466N: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f466n.dat
+  F070W: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f070w.dat
+  F323N: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f323n.dat
+  F335M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f335m.dat
+  F360M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f360m.dat
+  F140M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f140m.dat
+  F250M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f250m.dat
+  F150W2: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f150w2.dat
+  F182M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f182m.dat
+  F356W: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f356w.dat
+  F410M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f410m.dat
+  F150W: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f150w.dat
+  F277W: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f277w.dat
+  F430M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f430m.dat
+  F090W: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f090w.dat
+  F210M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f210m.dat
+  F460M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f460m.dat
+  F480M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f480m.dat
+  F187N: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f187n.dat
+  F115W: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f115w.dat
+  F212N: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f212n.dat
+  F444W: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f444w.dat
+  F405N: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f405n.dat
+  F322W2: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f322w2.dat
+  F162M: /projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/jwst_nircam_f162m.dat
+  F062: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/Roman_WFI.F062.dat"
+  F087: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/Roman_WFI.F087.dat"
+  F106: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/Roman_WFI.F106.dat"
+  F129: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/Roman_WFI.F129.dat"
+  F146: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/Roman_WFI.F146.dat"
+  F158: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/Roman_WFI.F158.dat"
+  F184: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/Roman_WFI.F184.dat"
+  F213: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/TAE/data/Roman_WFI.F213.dat"
+
+
+model_params:
+  name: SELDONEnergyClassifierDictModel
+  config:
+    variational: True
+    num_classes: 6
+    from_memory: False
+    class_conditional_decoder: False
+    class_embedding:
+      name: Embedding
+      config:
+        num_embeddings: ${model_params.config.num_classes}
+        embedding_dim: 32
+    energy_model:
+      name: EnergyBasedModel
+      config:
+        model:
+          name: ResidualNetwork
+          config:
+            n_features: ${sum:[${global_params.latent_dim}, ${model_params.config.class_embedding.config.embedding_dim}]}
+            n_output: 1
+            n_hidden: ${global_params.hidden_size} # Again, same as embedder.output_dim, dims are ignored for Partial types
+            n_layers: 2
+            activation: GELU
+            dropout: *dropout
+            norm: True
+        sampler:
+          name: BlockedGibbsEmbeddingSampler
+          config:
+            model: null
+            MALA: False
+            latent_dim: ${global_params.latent_dim}
+            num_classes: ${model_params.config.num_classes}
+            sample_size: ${dataset.config.batch_size}
+
+    distribution_model:
+      name: NormalDistributionModel
+      config:
+        input_dim: ${global_params.hidden_size}
+        output_dim: ${global_params.latent_dim}
+
+    uq_net:
+      name: ResidualNetwork # Partial objects are detected by the encoder and have their dims set appropriately
+      config:
+        n_features: ${sum:[${global_params.sed_size}, ${global_params.latent_dim}, 2]}
+        n_output: 1 
+        n_hidden: ${global_params.ode_size} # Again, same as embedder.output_dim, dims are ignored for Partial types
+        n_layers: 2
+        activation: GELU
+        dropout: *dropout
+        norm: True
+
+    encoder:
+      name: RecurrentODEEncoderV2
+      config:
+        embedder:
+          name: ModularLightCurveEmbedding
+          config:
+            output_dim: ${global_params.hidden_size} # Needed as a reference
+            mode: add
+            flux_embedding:
+              name: FPEmbedding
+              config:
+                nvector: 1
+                nemb: ${global_params.hidden_size}
+                dropout: *dropout
+                normalize: True
+            flux_error_embedding:
+              name: FPEmbedding
+              config:
+                nvector: 1
+                nemb: ${global_params.hidden_size}
+                dropout: *dropout
+                normalize: True
+            meta_data_embedding:
+              name: Embedding
+              config:
+                num_embeddings: 2
+                embedding_dim: ${global_params.hidden_size}
+                scale_grad_by_freq: False
+            band_embedding:
+              name: Embedding
+              config: 
+                num_embeddings: 43
+                embedding_dim: ${global_params.hidden_size}
+                scale_grad_by_freq: False
+            aggregator_module:
+              name: ResidualNetwork
+              config:
+                n_features: ${global_params.hidden_size}
+                n_output: ${global_params.hidden_size}
+                n_hidden: ${global_params.hidden_size}
+                n_layers: 1
+                dropout: *dropout
+                activation: GELU
+                n_heads: 1
+                norm: True
+                residual_input: True
+
+          #name: LightCurveEmbedding
+          #config:
+          #  input_dim: 1
+          #  output_dim: ${global_params.hidden_size}
+          #  band_emb_dim: 12 #*sed_size
+          #  embed_flux_error: True
+          #  embed_meta_data: True
+          #  embed_time: False
+          #  dropout: *dropout
+          #  scale_embedding_grad_by_freq: False
+          #  activation: GELU
+          #  #band_embedding_files: *transmission_filters
+          #  norm: True
+        rnn:
+          name: RNNODEEncoderV2 # Partial objects are detected by the encoder and have their dims set appropriately
+          config:
+            use_class_token: False
+            rnn_ode_cell:
+              name: RNNODECell
+              config:
+                rnn_cell:
+                  name: LNGRUCell
+                  config:
+                    input_size: ${model_params.config.encoder.config.embedder.config.output_dim}
+                    hidden_size: ${global_params.hidden_size}
+                ode_solver:
+                  name: ODESolver
+                  config:
+                    use_fixed_solver: True
+                    fixed_solver_steps: 1
+                    ode_net:
+                      name: ODEModelWrapper
+                      config:
+                        autonomous: True
+                        model:
+                          name: ResidualNetwork
+                          config:
+                            n_features: ${global_params.hidden_size}
+                            n_output: ${global_params.hidden_size}
+                            n_hidden: ${global_params.ode_size}
+                            n_layers: 1
+                            dropout: *dropout
+                            activation: GELU
+                            n_heads: 1
+                            norm: True
+                            residual_input: False
+
+        aggregator: null
+        output_network: 
+          name: ResidualNetwork # Partial objects are detected by the encoder and have their dims set appropriately
+          config:
+            n_features: ${global_params.hidden_size} # Again, same as embedder.output_dim, dims are ignored for Partial types
+            n_output: ${global_params.hidden_size} # Again, same as embedder.output_dim, dims are ignored for Partial types
+            n_hidden: ${global_params.ode_size} # Again, same as embedder.output_dim, dims are ignored for Partial types
+            n_layers: 1
+            activation: GELU
+            dropout: *dropout
+            norm: True
+            norm_first: True
+            residual_input: True
+
+        t_max: 1.0
+        N_points: 50
+        autoscale_input_time: False
+        autoscale_output_time: False
+
+    decoder: 
+      name: SpectrumBasisDecoder
+      config:
+        latent_dim: ${sum:[${global_params.latent_dim}]}
+        hidden: 256
+        BAND_EMB_DIM: *sed_size
+        num_basis: 16 # More basis parameters make redshift fits more difficult, or it might be the KL/Energy weights
+        dropout: *dropout
+        band_dropout: 0.0 #625 # (1 - 2*NUM_BANDS/BAND_EMB_DIM), on average each band gets 2 samples
+        activation: GELU
+        nlayers: 2
+        parameter_n_layers: 1
+        residual_parameter_input: True
+        logscale_output: True # This with autoscale_outputs can let the model learn in the original domain of the data
+        norm: True
+        norm_first: True
+        rescale_decoupled_network: False
+        full_spectrum: False
+        weight_bases: False # Right now, the weights act on too much of the latent vector
+        separable: True
+        norm_params: True
+        log_amp_center: 6.0
+        double_sigmoid: False
+        scale_band_embedding: False
+        softmax_time_evolution: False
+        sine_transform: True
+        use_logspace: False
+        norm_band_embedding: False
+        band_embedding_files: *transmission_filters
+        embedding_expansion: 16
+        time_impulse_first: False
+        embed_freqs: True
+        use_modular_basis: True
+        wave_min: 1e-3
+        wave_max: 10.0
+
+exp_params:
+  name: SELDONEnergyClassifierExperiment3
+  config:
+    kl_weight: 0.001 #0.01875 #0.00625 # Using beta-vae weight = 0.1 * latent / hidden
+    weight_bands: True 
+    weight_classes: True
+    inverse_transform: True
+    energy_weight:  0.001 #1e-2 # 0.1 * (hidden + num_classes) * 4 / hidden
+    scale_delta_by: "detection_flag"
+    inverse_scale_reconstruction: False # For 1-1 this would be true, but we want decoded predictions in log space
+    fit_redshift: True
+    energy_norm: 0.01 #1e-2
+    temperature: 1.0 #0.07
+    step_size: 0.0001
+    loss: 
+      name: FlexibleGaussianLoss
+      config:
+        eps: 1.0 #1e-4
+        #delta: 5.0
+    params:
+      dataset: LightCurveDataLoader
+      figures: []
+      optimizer: 
+        name: "Adam"
+        config:
+          LR: 3e-4 # #0.088 #0.088 #3e-3 # 1/sqrt(hidden)
+          weight_decay: 1e-5 #1e-5 #2e-5 #1e-5 #1e-5 # 0.1/hidden^2 #2e-5 #2e-5 #0.0 #2e-5 #0.0 #5e-6 #2.0e-04 #0.0 #2e-5 #0.0 #5e-5 #2e-3 #$0.0 #2e-5 #1e-4 #1e-5 #1e-5 #1 #1 #1e-5
+          scheduler:
+            name: CosineAnnealingScheduler
+            config:
+              T_max: 80000
+              eta_min: 1e-8
+          #scheduler:
+          #  name: SquareRootWarmupScheduler
+          #  config:
+          #    num_warmups: 4000
+    metrics: 
+      name: Metrics
+      config:
+        metrics:
+          - fractional_errors
+          - z_scores
+          #- nrmse
+    # dataset will be filled by the fill_config function
+
+trainer_params:
+  max_epochs: 200000
+  accelerator: "auto"
+  devices: "auto"
+  gradient_clip_val: 5.0
+  accumulate_grad_batches: 1
+  num_nodes: 1
+  strategy: "ddp" #"ddp_find_unused_parameters_true"
+  log_every_n_steps: 50
+  overfit_batches: 0
+  check_val_every_n_epoch: 2
+  resume_from_checkpoint: null
+  #overfit_batches: null
+  #check_val_every_n_epoch: 10
+  #resume_from_checkpoint: "/scratch/jackob/logs/BandAwareDeepSetGRUODEVAE_512_128_128/version_5/checkpoints/epoch=65-val_loss=1.01.ckpt"
+  #num_sanity_val_steps: 4
+  #detect_anomaly: True
+
+logging_params:
+  manual_seed: 42
+  save_dir: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/logs/"
+  name: "SELON_2.0"

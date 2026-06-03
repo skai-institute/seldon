@@ -1,0 +1,184 @@
+dataset:
+  name: LightCurveDataLoader
+  config:
+    #lightcurve_path: /projects/ncsa/caps/skai/data/YSE_DR1.parquet
+    lightcurve_path: /projects/ncsa/caps/skai/data/ELAsTiCC/complete.parquet
+    class_filter: 
+      - 'SNIa'        
+      - 'SNII'
+      - 'SNIIb'
+      - 'SNIIn'
+      - 'SNIb/c'
+      - 'SNIax'
+      - 'SN91bg'
+      - 'SLSN'
+      - 'KN'
+      - 'CART'
+      - 'ILOT'
+      - 'PISN'
+    flux_normalization: minmax
+    time_normalization: std
+    min_points: 11
+    max_points: 64
+    augmentations: 
+      - CutOffSample
+      #- BandSample
+      #- FullSample
+      #- CutOnSample
+      #- SparseSample
+    batch_size: 4096
+    num_workers: 8
+    mode: parquet
+    #test_run: False
+    t_max: "infer"
+    resample: True
+    include_non_detections: True
+    include_meta_data: True
+    t_offset: 0.0
+    group_classes: False
+    zero_non_detections: False
+    pin_memory: True
+    force_zero_non_detections: False
+    #min_obs_fraction: 0.0
+
+model_params:
+  name: BandAwareAutoencoder
+  config:
+    latent_dim: 6
+    variational: True
+    kl_weight: 1e-3
+    loss: 
+      name: MaskedHuberLoss
+      config:
+        weight_bands: True 
+        weight_classes: True 
+        inverse_transform: True
+        delta: 5.0
+        scale_delta_by: "detection_flag"
+        scale_recon: True # Default: True, False is useful with logscale_output in the decoder and inverse_transform=True, breaks plotting
+        tune_parameters: False
+    is_adversarial: False
+    adv_epsilon: 0.0005
+    adv_alpha: 0.8
+    encoder:
+      name: RecurrentODEEncoderV2
+      config:
+        embedder:
+          name: LightCurveEmbedding
+          config:
+            input_dim: 6
+            output_dim: 256
+            band_emb_dim: 32
+            embed_flux_error: True
+            embed_meta_data: True
+            dropout: 0.01
+            scale_embedding_grad_by_freq: False
+            activation: GELU
+        rnn:
+          name: InformerModelEncoder
+          config:
+            n_features: 256 # should be embedder.output_dim, dims are ignored for Partial types
+            n_output: 256
+            n_hidden: 256
+            n_basis: 4
+            n_layers: 4
+            activation: GELU
+            dropout: 0.01
+            norm: True
+        aggregator: null
+        #  name: Partial # Partial objects are detected by the encoder and have their dims set appropriately
+        #  config:
+        #    model_class: 
+        #      name: SimpleDeepSet
+        #      config: null
+        #    input_dim: 257 # should be embedder.output_dim + 1, dims are ignored for Partial types
+        #    hidden_dim: 256 # should be embedder.output_dim, dims are ignored for Partial types
+        #    activation: GELU
+        #    dropout: 0.0
+        #    pooling: attentive
+        #    norm: True
+        #    n_layers: 2
+        output_network:
+          name: Partial # Partial objects are detected by the encoder and have their dims set appropriately
+          config:
+            model_class: 
+              name: ResNet
+              config: null
+            ninp: 256 # Again, same as embedder.output_dim, dims are ignored for Partial types
+            noutp: 256 # Again, same as embedder.output_dim, dims are ignored for Partial types
+            nhid: 256 # Again, same as embedder.output_dim, dims are ignored for Partial types
+            nlayers: 1
+            activation: GELU
+            dropout: 0.01
+            norm: True
+            bias: True
+
+        t_max: 1.0
+        N_points: 50
+        autoscale_input_time: True
+        autoscale_output_time: False
+
+    decoder: 
+      name: "SigmoidBasisDecoder"
+      config:
+        latent_dim: 6
+        hidden: 256
+        BAND_EMB_DIM: 32
+        num_basis: 2
+        dropout: 0.0 #0.01
+        activation: GELU
+        decoupled: True
+        nlayers: 2
+        decouple_dim: 
+          - 1
+          - 1
+        band_dot_prod: True
+        logscale_output: False # This with autoscale_outputs can let the model learn in the original domain of the data
+        suppress_higher_terms: False
+        norm: True
+        rescale_decoupled_network: True
+        sed_mode: True # Treat the set of basis functions as an SED where the band embedding is a softmax filter
+        accumulate: False
+        include_redshift: True # Apply a mock redshift-like correction to the time and amplitudes
+        tanhshrink_centroids: False # Use a tanhshrink on the t0's rather than mean-centering
+        autoscale_outputs: False # This makes the network capable of learning a scale factor for the inverse transform
+
+exp_params:
+  name: GRUVAEExperiment
+  config:
+    params:
+      dataset: SNDataModuleParquet
+      figures: []
+      optimizer: 
+        name: "Adam"
+        config:
+          LR: 3e-4
+          weight_decay: 0.0 #2e-5 #2e-5 #0.0 #2e-5 #0.0 #5e-6 #2.0e-04 #0.0 #2e-5 #0.0 #5e-5 #2e-3 #$0.0 #2e-5 #1e-4 #1e-5 #1e-5 #1 #1 #1e-5
+          encoder_scale_factor: 1.0
+          reduce_on_plateau: True
+    metrics: 
+      name: Metrics
+      config:
+        metrics:
+          - fractional_errors
+          - z_scores
+          #- nrmse
+    # dataset will be filled by the fill_config function
+
+trainer_params:
+  max_epochs: 3000
+  accelerator: "auto"
+  devices: "auto"
+  gradient_clip_val: 0.5
+  accumulate_grad_batches: 1
+  num_nodes: 1
+  strategy: "ddp"
+  log_every_n_steps: 50
+  #resume_from_checkpoint: "/scratch/jackob/logs/BandAwareDeepSetGRUODEVAE_512_128_128/version_5/checkpoints/epoch=65-val_loss=1.01.ckpt"
+  #num_sanity_val_steps: 4
+  #detect_anomaly: True
+
+logging_params:
+  manual_seed: 42
+  save_dir: "/projects/ncsa/caps/skai/software/Transient-Foundation-Model/logs/"
+  name: "SELON_3.0"

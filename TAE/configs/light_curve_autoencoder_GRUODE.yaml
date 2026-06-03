@@ -13,11 +13,11 @@ dataset:
       - 'SLSN'
       - 'KN'
       - 'CART'
-      - 'TDE'
-      - 'PISN'
-      - 'Dwarf Novae'
       - 'ILOT'
-      - 'M-dwarf Flare'
+      - 'PISN'
+      #- 'Dwarf Novae'
+      #- 'TDE'
+      #- 'M-dwarf Flare'
       #- 'EB'
       #- 'AGN'
       #- 'uLens'
@@ -26,43 +26,45 @@ dataset:
       #- 'Cepheid'
     flux_normalization: minmax
     time_normalization: std
-    min_points: 7
+    min_points: 11
     max_points: 256
     augmentations: 
       - FullSample
       - CutOffSample
       - BandSample
-      - SparseSample
-      - CutOnSample
+        #- SparseSample
+        #- CutOnSample
     batch_size: 1024
-    num_workers: 16
+    num_workers: 8
     mode: parquet
     #test_run: False
     t_max: "infer"
     resample: True
     include_non_detections: True
     include_meta_data: True
-    t_offset: -1.0
+    t_offset: 0.0
     group_classes: False
     zero_non_detections: True
     pin_memory: True
+    force_zero_non_detections: True
     #min_obs_fraction: 0.0
 
 model_params:
   name: BandAwareAutoencoder
   config:
-    latent_dim: 5
+    latent_dim: 8
     variational: True
-    kl_weight: 1e-4
+    kl_weight: 1e-2
     loss: 
       name: MaskedHuberLoss
       config:
         weight_bands: True 
         weight_classes: True 
-        inverse_transform: True
-        delta: 5.0
+        inverse_transform: False
+        delta: 1000.0
         scale_delta_by: "detection_flag"
         scale_recon: True # Default: True, False is useful with logscale_output in the decoder and inverse_transform=True, breaks plotting
+        tune_parameters: True
     is_adversarial: False
     adv_epsilon: 0.0005
     adv_alpha: 0.8
@@ -70,15 +72,15 @@ model_params:
       name: "RecurrentODEEncoder"
       config:
         input_dim: 2
-        hidden_dim: 64
-        dropout: 0.1 #0.01
-        nlayers: 2
-        BAND_EMB_DIM: 6
+        hidden_dim: 256
+        dropout: 0.0 #0.01
+        nlayers: 1 # Try setting to 1 layer
+        BAND_EMB_DIM: 18
         pooling: "sum"
         norm: True
         activation_ode: GELU
         activation_deepsets: GELU
-        aggregate_with_deepsets: True
+        aggregate_with_deepsets: False
         embed_flux_error: True
         embed_meta_data: True
         bias: True
@@ -96,14 +98,14 @@ model_params:
     decoder: 
       name: "SigmoidBasisDecoder"
       config:
-        latent_dim: 5
-        hidden: 64
+        latent_dim: 8
+        hidden: 256
         BAND_EMB_DIM: 18
         num_basis: 18
-        dropout: 0.1 #0.01
+        dropout: 0.0 #0.01
         activation: GELU
         decoupled: True
-        nlayers: 2
+        nlayers: 4
         decouple_dim: 
           - 1
           - 1
@@ -127,10 +129,10 @@ exp_params:
       optimizer: 
         name: "Adam"
         config:
-          LR: 3e-4
+          LR: 1e-4
           weight_decay: 0.0 #2e-5 #2e-5 #0.0 #2e-5 #0.0 #5e-6 #2.0e-04 #0.0 #2e-5 #0.0 #5e-5 #2e-3 #$0.0 #2e-5 #1e-4 #1e-5 #1e-5 #1 #1 #1e-5
           encoder_scale_factor: 1.0
-          reduce_on_plateau: True
+          reduce_on_plateau: False
     metrics: 
       name: Metrics
       config:

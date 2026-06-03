@@ -3,7 +3,59 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from TAE.util import register_module
+from TAE.util import register_module, read_transmission_filter, map_transmission_filters
+from TAE.datasets.utils import BAND_IDX_MAP
+
+register_module(nn.Embedding)
+
+@register_module
+class TransmissionFilterEmbedding(nn.Module):
+
+    UNIT_SCALE = {
+        'microns': 1.0,
+        'angstroms': 1e4,
+        'cm': 1e-4,
+        }
+
+    def __init__(self, filelist, emb_dim=6, lambda_min=None, lambda_max=None, lambda_unit='microns', logscale=False):
+
+        super().__init__()
+        self.filelist = filelist # List of transmission filter files
+        self.emb_dim = emb_dim
+        self.logscale = logscale
+
+        self.lambda_min = lambda_min
+        self.lambda_max = lambda_max
+
+        self.lamba_unit = lambda_unit
+        self.lambda_scale = self.UNIT_SCALE[self.lambda_unit]
+
+        self.load_filters()
+
+    def __len__(self):
+
+        return self.num_bands
+
+
+    def load_filters(self):
+
+        wave_min = self.lambda_min / self.lambda_scale if self.lambda_min is not None else None
+        wave_max = self.lambda_max / self.lambda_scale if self.lambda_max is not None else None
+        lambda_grid, filters = map_transmission_filters(self.filelist, n_points=self.emb_dim, wave_min=wave_min, wave_max=wave_max)
+        band_idx = [BAND_IDX_MAP[key] for key in filters]
+        throughput = np.vstack(list(filters.values())).astype(np.float32)
+        if self.logscale:
+            throughput = torch.log(torch.tensor(throughput[np.argsort(band_idx)], requires_grad=False)).clamp_min(-44.0)
+        self.emb = nn.Embedding.from_pretrained(throughput, freeze=True)
+        lambda_grid = torch.tensor(lambda_grid[None, None, :].astype(np.float32), requires_grad=False) * self.lambda_scale
+        self.num_bands = len(filters)
+        self.register_buffer("lambda_grid", lambda_grid)
+
+    def forward(self, band_idx):
+
+        return self.emb(band_idx)
+
+
 
 class LinearTimeEmbedding(nn.Module):
     # https://arxiv.org/html/2409.20092v1
@@ -167,7 +219,7 @@ class PositionalEncoding(nn.Module):
         )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
+        pe = pe.unsqueeze(0)
         self.register_buffer("pe", pe)
 
     def forward(self, x):
@@ -181,10 +233,10 @@ class PositionalEncoding(nn.Module):
             >>> output = pos_encoder(x)
         """
 
-        x = x + self.pe[: x.size(0), :]
+        x = x + self.pe[:, x.size(1), :]
         return self.dropout(x)
 
-
+@register_module
 class FPEmbedding(nn.Module):
 
     def __init__(self, nvector, nemb, dropout=0.2, normalize=False):

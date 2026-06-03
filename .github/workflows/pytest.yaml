@@ -20,7 +20,7 @@ jobs:
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-update-conda: true
-          python-version: 3.9
+          python-version: "3.12"
           # The following line is the name of the environment that will be created
           # in the conda environment using the environment.yml file. The environment
           # will be automatically activated in the following steps.

@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from dataclasses import dataclass
 from .loss import *
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 from pathlib import Path
 import torch.nn.functional as F
 
@@ -12,7 +12,7 @@ from .encoders import GRUEncoder
 from .decoders import MLPBandDecoder
 from .parametric_decoders import BazinDecoder
 from TAE.util import register_module
-from TAE.models.ModelNN import VariationalComponent
+from TAE.models.ModelNN import VariationalComponent, ApproximatePosterior
 
 
 
@@ -31,6 +31,36 @@ class AEOutput:
     reconstruction: torch.Tensor
     latent_observation: torch.Tensor
     mask: torch.Tensor
+
+
+@register_module
+class VariationalAutoEncoder(nn.Module):
+
+    def __init__(self, encoder, decoder, distribution_model):
+
+        super().__init__()
+
+        self.encoder = encoder
+        self.distribution_model = distribution_model
+        self.decoder = decoder
+
+        self.approximate_posterior = ApproximatePosterior()
+
+    def forward(self, x):
+
+        encoding = self.encoder(x)
+
+        mean, sigma = self.distribution_model(encoding)
+
+        sample = self.approximate_posterior.sample(mean, sigma)
+
+        z = sample if self.training else mean
+
+        output = self.decoder(z)
+
+        elbo = self.approximate_posterior.kl_divergence(mean, torch.square(sigma))
+
+        return {'output': output, 'mean': mean, 'sigma': sigma, 'sample':sample, 'z': z, 'elbo': elbo, 'encoding': encoding, "input": x}
 
 
 class Autoencoder(nn.Module):
@@ -100,6 +130,8 @@ class BandAwareAutoencoder(nn.Module):
         adv_alpha: float = 0.9,
         adv_epsilon: float = 0.0005,
         variational_epsilon: float = 1e-4,
+        scale_sigma_by_number: bool = False,
+        group_latent_by_class: bool = False,
         **kwargs
     ):
         
@@ -111,6 +143,8 @@ class BandAwareAutoencoder(nn.Module):
         """
         super().__init__()
 
+        self.scale_sigma_by_number = scale_sigma_by_number
+        self.group_latent_by_class = group_latent_by_class
         self.is_adversarial = is_adversarial
         self.adv_alpha = adv_alpha
         self.adv_epsilon = adv_epsilon
@@ -136,12 +170,12 @@ class BandAwareAutoencoder(nn.Module):
         self.decoder = decoder
         self.embedder = embedder
         
-
         self.variational_component = VariationalComponent(
             encoder.hidden_dim, 
             latent_dim, 
             variational=variational,
-            epsilon=self.variational_epsilon)
+            epsilon=self.variational_epsilon,
+            scale_sigma_by_number=self.scale_sigma_by_number)
 
         self.kl_weight = kl_weight
         self.out_sample_lambda = out_sample_lambda
@@ -165,15 +199,16 @@ class BandAwareAutoencoder(nn.Module):
         """
         memory = self.encoder(x, band_idx_part, mask)
 
-        latent_components = self.variational_component(memory)
+        latent_components = self.variational_component(memory, mask)
         z_mean = latent_components['z_mean']
         z = latent_components['z_sample']
         z_var = latent_components['z_var']
         z_sigma = latent_components['z_sigma']
 
-        reconstructed = self.decoder(z, t, band_idx_full)
+        reconstructed, parameters = self.decoder(z, t, band_idx_full, return_parameters=True)
+        #parameters = dict(zip(['basis', 'weights', 'mu', 'sigma', 'e_b', 'redshift'], parameters))
 
-        return {"reconstructed": reconstructed, "z_mean": z_mean, "z_var": z_var, 'z_sample': z, "z_sigma": z_sigma}
+        return {"reconstructed": reconstructed, "z_mean": z_mean, "z_var": z_var, 'z_sample': z, "z_sigma": z_sigma, "parameters":parameters}
 
     def embed(self, batch):
 
@@ -187,7 +222,7 @@ class BandAwareAutoencoder(nn.Module):
         """
         with torch.no_grad():
             z = self.encoder(x, band_idx, mask)
-            latent_components = self.variational_component(z)
+            latent_components = self.variational_component(z, mask)
             z = latent_components['z_mean']
             return z
 
@@ -206,8 +241,26 @@ class BandAwareAutoencoder(nn.Module):
         z_mean=out["z_mean"]
         z_var=out["z_var"]
 
+        if self.group_latent_by_class:
+            class_names = batch['class_name']
+            class_set = set(class_names)
+            class_map = dict(zip(class_set, range(len(class_set))))
+            class_idx = torch.tensor(list(map(lambda x: class_map[x], class_names)), dtype=torch.long)
+            class_onehots = F.one_hot(class_idx, num_classes=len(class_set)).to(z_mean.device) # (B, N_classes)
+            class_N = class_onehots.sum(dim=0, keepdim=True) # number of class examples in each minibatch
+
+            centers = z_mean[:, None, :] * class_onehots[:, :, None] # (B, N_classes, N_latent)
+            centers = centers.sum(dim=0, keepdim=True) # (1, N_classes, N_latent)
+            centers = centers / class_N[:, :, None] # (1, N_classes, N_latent)
+            z_mean = z_mean[:, None, :] * class_onehots[:, :, None] - centers * class_onehots[:, :, None] # (B, N_classes, N_latent)
+            z_mean = z_mean.sum(1) # (B, N_latent), sum over dim 1 just extracts the one_hot values
+
         reconstruction_loss = self.recon_loss(out, batch)
-        kl = self.variational_component.kl_divergence(z_mean, z_var)
+        
+        if self.recon_loss.weight_classes:
+            kl = self.variational_component.kl_divergence(z_mean, z_var, weight=batch["class_weight"])
+        else:
+            kl = self.variational_component.kl_divergence(z_mean, z_var)
 
         total_loss = (
             torch.mean(reconstruction_loss) + self.kl_weight * kl
@@ -252,7 +305,7 @@ class BandAwareAutoencoder(nn.Module):
                 t=batch["time_full"],
                 band_idx_part=batch["band_idx"],
                 band_idx_full=batch["band_idx_full"],
-                mask=batch["in_sample_mask"],
+                mask=batch["pad_mask_part"],
                 time_sorted=batch['time_sorted'],
                 sequence_batch_mask=batch['sequence_batch_mask'],
             )

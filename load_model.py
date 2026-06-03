@@ -1,4 +1,4 @@
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch.backends.cudnn as cudnn
 from omegaconf import OmegaConf
 from TAE.datasets.dataset_factory import get_module as get_dataset
@@ -18,7 +18,12 @@ version = 25
 logdir = Path('/scratch/jackob/logs/BandAwareGRUVAE')
 config_path = logdir / f'version_{version}'
 
-def load_model(config_path, device='cuda'):
+def load_model(config_path, device='cuda', load_weights=True):
+    torch.serialization.clear_safe_globals()
+    torch.serialization.add_safe_globals([np.dtypes.Float32DType])
+    torch.serialization.add_safe_globals([np.dtypes.Float64DType])
+    torch.serialization.add_safe_globals([np.dtype])
+    torch.serialization.add_safe_globals([np.core.multiarray.scalar])
     config_path = Path(config_path)
 
 
@@ -40,19 +45,38 @@ def load_model(config_path, device='cuda'):
 
     model = get_module(cfg["model_params"]["name"], config["model_params"]["config"])
     data = get_dataset(config["dataset"]["name"], config["dataset"]["config"])
+    data.setup()
 
     # === Load experiment wrapper ===
     experiment = get_experiment(
         cfg["exp_params"]["name"],
         {"model": model, "data": data, **config["exp_params"]["config"]},
     )
-    data.setup()
+    #data.setup()
 
-    weights_file = list(config_path.glob('checkpoints/epoch*'))[0]
-    experiment.load_from_checkpoint(checkpoint_path=weights_file,
-                                    model=model,
-                                    data=data,
-                                    params=cfg["exp_params"]["config"]["params"]);
+    if load_weights:
+        weights_file = list(config_path.glob('checkpoints/epoch*'))[0]
+        #experiment.load_from_checkpoint(checkpoint_path=weights_file)
+        try:
+            experiment.load_from_checkpoint(checkpoint_path=weights_file,
+                                            model=model,
+                                            data=data,
+                                            weights_only=None,
+                                            params=cfg["exp_params"]["config"]["params"], strict=True);
+        except Exception as e:
+            print(e) # Force Manual Loading Because it is stupid
+            experiment = get_experiment(
+                cfg["exp_params"]["name"],
+                {"model": model, "data": data, **config["exp_params"]["config"]},
+            )
+            #experiment.model.energy_model = experiment.energy_model
+            experiment.model.energy_model = energy_model
+            weights = torch.load(weights_file, map_location=torch.device(device))['state_dict']
+            #experiment.load_state_dict(weights)
+            for name, parameter in experiment.named_parameters():
+                if 'energy_model' in name:
+                    print(name)
+                parameter.data = weights[name]
     if device == 'cuda':
         model.cuda()
         experiment.cuda()
