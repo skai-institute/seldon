@@ -14,8 +14,17 @@ from TAE.util import (
 
 
 class TestReadTransmissionFilter:
+    """read_transmission_filter returns wavelengths in MICRONS.
+
+    The loader normalizes each instrument's native units (LSST files in
+    nm, JWST files in microns, Roman files in Angstroms) to a common
+    micron scale. These tests pin the returned ranges to each band's
+    physical extent so a unit-branch regression (off by 10x or 1e4)
+    fails loudly for every instrument.
+    """
+
     def test_rubin_filter(self, data_dir):
-        """Rubin/LSST filter: 'total' in filename triggers nm-to-Angstrom conversion."""
+        """Rubin/LSST filter: file in nm; returned in microns."""
         path = os.path.join(data_dir, "total_g.dat")
         wavelength, throughput = read_transmission_filter(path)
 
@@ -23,29 +32,35 @@ class TestReadTransmissionFilter:
         assert isinstance(throughput, np.ndarray)
         assert len(wavelength) == len(throughput)
         assert len(wavelength) > 0
-        # After nm * 10 conversion, wavelengths should be in Angstroms (3000-11000 range)
-        assert wavelength.min() > 1000
+        # LSST throughput files span ~300-1150 nm -> ~0.30-1.15 microns
+        assert 0.2 < wavelength.min() < 0.5
+        assert 1.0 < wavelength.max() < 1.5
         assert throughput.min() >= 0.0
         assert throughput.max() <= 1.0
 
     def test_jwst_filter(self, data_dir):
-        """JWST filter: 'jwst' in filename triggers micron-to-Angstrom conversion."""
+        """JWST filter: file natively in microns; returned in microns."""
         path = os.path.join(data_dir, "jwst_nircam_f200w.dat")
         wavelength, throughput = read_transmission_filter(path)
 
         assert isinstance(wavelength, np.ndarray)
         assert len(wavelength) == len(throughput)
-        # After micron * 1e4 conversion, wavelengths should be in Angstroms (> 1000)
-        assert wavelength.min() > 1000
+        # F200W spans ~1.69-2.30 microns
+        assert 1.5 < wavelength.min() < 2.0
+        assert 2.0 < wavelength.max() < 2.5
 
     def test_roman_filter(self, data_dir):
-        """Roman filter: no unit conversion (neither 'jwst' nor 'total' in filename)."""
+        """Roman filter: file in Angstroms; returned in microns."""
         path = os.path.join(data_dir, "Roman_WFI.F062.dat")
         wavelength, throughput = read_transmission_filter(path)
 
         assert isinstance(wavelength, np.ndarray)
         assert len(wavelength) == len(throughput)
         assert len(wavelength) > 0
+        # F062 spans ~0.46-0.80 microns; asserting the range guards the
+        # cross-instrument unit consistency the loader exists to provide
+        assert 0.3 < wavelength.min() < 0.6
+        assert 0.6 < wavelength.max() < 1.0
 
 
 class TestMapTransmissionFilters:
