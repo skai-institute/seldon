@@ -1,5 +1,6 @@
 import pickle
 import numpy as np
+import random
 import torch
 import sys
 from collections import defaultdict
@@ -13,6 +14,7 @@ import torch
 from enum import Enum
 from TAE.util import fill_config, extract_curves_from_filtered_data, registry, register_module
 from multiprocessing import Process, Manager
+from TAE.datasets.bandpasses import BandIndexMap
 from TAE.datasets.utils import BAND_IDX_MAP
 from TAE.datasets.preprocessing import *
 from TAE.datasets.masking import *
@@ -22,20 +24,22 @@ import pandas as pd
 from TAE.datasets.elasticc_utils import ELAsTiCC_to_Astrophysical_mappings
 import pyarrow
 from pyarrow import parquet
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 "A more flexible Dataloader for arbitrary data that can be instructed for how to interpret files from the config"
 
 OPTIONAL_KEYS = ['class']
 
-REQUIRED_KEYS = ['class','MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG', 'REDSHIFT_FINAL', "SNID"]
+REQUIRED_KEYS = ['class','MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG', 'REDSHIFT_FINAL', "SNID", "REDSHIFT_FINAL_ERR"]
 default_values = dict(
-    zip(['MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG', 'REDSHIFT_FINAL', "SNID", "class"],
-    [0.0, 0.0, 0.0, 'g', 0, -9, 0, "Unknown"])
+    zip(['MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG', 'REDSHIFT_FINAL', "SNID", "class", "REDSHIFT_FINAL_ERR"],
+    [0.0, 0.0, 0.0, 'g', 0, -9, 0, "Unknown", 1.0])
 
 )
 default_column_map = dict(
-    zip(['ELASTICC_class','MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG', 'REDSHIFT_FINAL', "SNID"],
-    ['class','MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG', 'REDSHIFT_FINAL', "SNID"])
+    zip(['ELASTICC_class','MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG', 'REDSHIFT_FINAL', "SNID", "REDSHIFT_FINAL_ERR"],
+    ['class','MJD','FLUXCAL','FLUXCALERR','BAND','PHOTFLAG', 'REDSHIFT_FINAL', "SNID", "REDSHIFT_FINAL_ERR"])
 ) # File Keys to Data Keys
 
 
@@ -75,6 +79,8 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
         class_map=None,
         setup_from_data=True,
         zero_point_flux=1.0,
+        band_index_map=None,
+        convert_bands_to_sncosmo_from_filename=False,
         **kwargs
     ):
         super().__init__()
@@ -85,6 +91,18 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
         self.band_weights = band_weights
         self.class_map = class_map
         self.setup_from_data = setup_from_data
+        self.class_weights = None
+        self.convert_bands_to_sncosmo_from_filename = convert_bands_to_sncosmo_from_filename
+
+        if band_index_map is None:
+            self.band_index_map = BAND_IDX_MAP
+        else:
+            self.band_index_map = band_index_map
+
+        self.index_band_map = dict(zip(self.band_index_map.values(), self.band_index_map.keys()))
+        cmap = plt.colormaps['nipy_spectral_r']
+        rgba_colors = cmap(np.linspace(0, 1, len(self.index_band_map)//2+2))
+        self.band_index_to_colors = [mcolors.to_hex(color) for color in rgba_colors[::2]] + [mcolors.to_hex(color) for color in rgba_colors[::-2]]+ [mcolors.to_hex(color) for color in rgba_colors[1::2]] + [mcolors.to_hex(color) for color in rgba_colors[1::][::-2]]
 
         if column_map is None:
             self.column_map = default_column_map
@@ -135,6 +153,7 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
 
             print("Extracting", path, file=sys.stderr)
             available_columns = extract_column_names(path)
+            #print(available_columns, file=sys.stderr)
             accessible_columns = set(available_columns) & set(self.column_map.keys())
             if 'ELASTICC_class' not in accessible_columns:
                 accessible_columns |= {'class'}
@@ -161,10 +180,12 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
                     df[key] = default_values[key]
             #df.rename(self.column_map, inplace=True)
 
-            df['class'] = df['class'].map(self.class_mapping)
+            df['class'] = df['class'].map(lambda x: self.class_mapping.get(x, x))
             
             if self.class_filter is not None:
+                print("Removed the following classes:", df['class'][~df['class'].isin(tuple(self.class_filter))].unique(), file=sys.stderr)
                 df = df[df['class'].isin(tuple(self.class_filter))]
+                
             else:
                 print(f"No Class Filter Provided, extracting all classes: {len(df)} entries found", file=sys.stderr)
             print("Loaded", path, "with", len(df), "rows", file=sys.stderr)
@@ -245,15 +266,13 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
             self.init_data_stats()
             if self.fine_tune_data is not None:
                 self.lightcurve_path = self.fine_tune_data
-                self.class_filter = None
-                self.batch_size=32
+                #self.class_filter = None
+                self.batch_size=16
                 self.load_data()
                 self.init_class_weights()
                 self.init_light_curves()
                 self.init_band_index()
                 self.init_meta_data()
-
-        
 
         self.dataset = LightCurvePreprocessor(        
             light_curves = self.full_light_curve_array,
@@ -279,22 +298,25 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
             [train_size, val_size, test_size],
             generator=torch.Generator().manual_seed(42),
         )
+        self.val_generator = torch.Generator().manual_seed(42)
         self.is_set_up = True
         
     def init_class_weights(self):
 
         print("Weighting Classes...")
-        self.class_label_names = []#self.manager.list()
-        self.class_label_names.extend(sorted(list(set(self.full_class_names))))
+        if self.class_weights is None:
+            self.class_label_names = []#self.manager.list()
+            self.class_label_names.extend(sorted(list(set(self.full_class_names))))
 
-        self.class_map = {}#self.manager.dict()
-        self.class_map.update(dict(zip(sorted(self.class_label_names), range(len(self.class_label_names)))))
+        
+            self.class_map = {}#self.manager.dict()
+            self.class_map.update(dict(zip(sorted(self.class_label_names), range(len(self.class_label_names)))))
         
         self.label2class = {}#self.manager.dict()
         self.label2class.update(dict(zip(self.class_map.values(), self.class_map.keys())))
 
         self.class_counts = {}#self.manager.dict()
-        self.class_counts.update({key: self.full_class_names.count(key) for key in self.class_map})
+        self.class_counts.update({key: self.full_class_names.count(key)+1 for key in self.class_map})
 
         self.class_weights = {}#self.manager.dict()
         self.class_weights.update({key: len(self.full_class_names)/self.class_counts[key]/len(self.class_label_names) for key in self.class_counts})
@@ -314,6 +336,11 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
                 np.column_stack([np.asarray(self.full_light_curves.iloc[i][c], dtype=np.float32) for c in columns])
                 for i in tqdm(range(len(self.full_light_curves)), desc="Extracting Redshifts")
             ]
+            columns = ['REDSHIFT_FINAL_ERR']
+            redshift_err_data_array = [
+                np.column_stack([np.asarray(self.full_light_curves.iloc[i][c], dtype=np.float32) for c in columns])
+                for i in tqdm(range(len(self.full_light_curves)), desc="Extracting Redshift Errors")
+            ]
             columns = ['SNID']
             snid_data_array = [
                 np.column_stack([np.asarray(self.full_light_curves.iloc[i][c], dtype=np.int64) for c in columns])
@@ -322,6 +349,7 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
             self.meta_data = {'detection_flag':meta_data_array}
             self.meta_data.update({'REDSHIFT_FINAL': redshift_data_array})
             self.meta_data.update({'SNID': snid_data_array})
+            self.meta_data.update({'REDSHIFT_FINAL_ERR': redshift_err_data_array})
 
         if self.zero_non_detections:
             if self.include_meta_data:
@@ -364,23 +392,23 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
 
             self.band_array = [
                 df["band" if "band" in df.columns else "filter"]
-                .map(BAND_IDX_MAP)
+                .map(self.band_index_map)
                 .reset_index(drop=True)
                 .values
                 for df in tqdm(self.full_light_curves, desc="Mapping Bands to Indices") if len(df) >= self.min_points
             ]
         elif self.mode == 'parquet':
             self.band_array = [
-                np.array([BAND_IDX_MAP[x.lower() if len(x)==1 else x] for x in self.full_light_curves.iloc[i]["BAND_clean"]])
+                np.array([self.band_index_map[x.lower() if len(x)==1 else x] for x in self.full_light_curves.iloc[i]["BAND_clean"]])
                 for i in tqdm(range(len(self.full_light_curves)), desc="Mapping Bands to Indices")
             ]
-
-        all_bands = np.hstack(self.band_array)
-        n_bands = len(set(all_bands))
-        bin_counts = np.bincount(all_bands, minlength=int(all_bands.max()))
-        self.band_weights = {} #self.manager.dict()
-        self.band_weights.update({key: len(all_bands)/bin_counts[key]/n_bands for key in range(len(bin_counts))})
-        print("Found Band Weighting", self.band_weights, "from", bin_counts, file=sys.stderr)
+        if self.band_weights is None:
+            all_bands = np.hstack(self.band_array)
+            n_bands = len(set(all_bands))
+            bin_counts = np.bincount(all_bands, minlength=int(all_bands.max()))
+            self.band_weights = {} #self.manager.dict()
+            self.band_weights.update({key: len(all_bands)/bin_counts[key]/n_bands for key in range(len(bin_counts))})
+            print("Found Band Weighting", self.band_weights, "from", bin_counts, file=sys.stderr)
 
     def init_data_stats(self):
 
@@ -436,6 +464,8 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
             persistent_workers=self.persistent_workers,
             prefetch_factor=self.prefetch_factor,
             drop_last=True,
+            worker_init_fn=seed_worker,
+            #generator=self.val_generator,
         )
 
     def test_dataloader(self):
@@ -450,6 +480,12 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
             prefetch_factor=None,
             drop_last=False,
         )
+
+def seed_worker(worker_id):
+    """Seed function to ensure deterministic behavior in background workers."""
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
     
 def test():
 

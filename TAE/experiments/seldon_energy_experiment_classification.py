@@ -422,6 +422,7 @@ class SELDONEnergyClassifierExperiment3(Experiment):
             class_idx=class_idx,
         )
 
+    # Should think about losses returning a dict with loss, chi2, masks, components
     def energy_loss(self, out, batch):
 
         real_z = out['memory'].clone() if self.model.from_memory else out['z_sample']# (B, latent_dim)
@@ -446,15 +447,114 @@ class SELDONEnergyClassifierExperiment3(Experiment):
         energy_loss = reg_loss + cdiv_loss
         energy_loss = energy_loss
 
-        return energy_loss
+        return energy_loss * self.get_class_weights(batch)[:, None]
+
+
+    def redshift_loss(self, out, batch):
+        # TODO: Optional Redshift Error
+        if self.fit_redshift:
+            valid_mask = (batch['redshift'] > 0)
+            redshift_true = batch['redshift'][valid_mask]
+            redshift_pred = out['parameters']['redshift'][valid_mask]
+            class_weight = self.get_class_weights(batch)[valid_mask]
+            if 'redshift_error' in batch:
+                redshift_var = torch.square(batch['redshift_error'][valid_mask])
+            else:
+                redshift_var = 1.0
+
+            redshift_loss = ((redshift_true - redshift_pred)**2 * class_weight / redshift_var)
+        else:
+            redshift_loss = torch.ones_like(batch['class_weight'])
+
+        return redshift_loss
+
+    def reconstruction_loss(self, out, batch):
+
+        delta_scaler = None
+        if self.scale_delta_by is not None:
+            delta_scaler = batch[self.scale_delta_by]
+
+        flux_nn, target, sigma = out["reconstructed"], batch["flux_full"], batch["flux_err_full"]
+        flux_err_nn = out['error'] if 'error' in out else None
+        flux_pred, flux_err_pred = self.post_process_prediction(flux_nn, flux_err_nn)
+        flux_target, flux_err_target = self.post_process(target, sigma)
+
+        if flux_err_pred is not None:
+            sigma_eff = torch.sqrt(flux_err_target**2 + flux_err_pred**2)
+        else:
+            sigma_eff = flux_err_target
+
+        reconstruction_loss = self.recon_loss(flux_pred, flux_target, sigma_eff, delta_scaler) # (B, S, E)
+        
+        if self.weight_bands:
+            reconstruction_loss *= batch["band_weight"][:, :, None]
+
+        if self.weight_classes:
+            reconstruction_loss *= self.get_class_weights(batch)[:, None, None]
+
+        padding_mask = batch["pad_mask_full"].unsqueeze(-1)
+        reconstruction_loss = (padding_mask * reconstruction_loss).sum(1) / (padding_mask.sum(1))
+
+        return reconstruction_loss
+
+    def kl_divergence_loss(self, out, batch):
+
+        return out['elbo'][:, None] * self.get_class_weights(batch)[:, None]
+
+
+    def get_class_weights(self, batch):
+
+        if self.weight_classes:
+            return batch['class_weight']
+        else:
+            return torch.ones_like(batch['class_weight'])
+
+
+    def rescale_prediction(self, flux_nn, flux_err_nn=None):
+
+        if not self.inverse_scale_reconstruction:
+            scale = self.data.dataset.flux_normalizer.max_value
+            flux_pre = (flux_nn + 0.5) / scale - 0.5 # we want predicted scaled flux f is flux_norm(semilog(F))
+            if flux_err_nn is not None:
+                flux_err_pre = flux_err_nn / scale
+            else:
+                flux_err_pre = None
+        else:
+            flux_pre = flux_nn
+            flux_err_pre = flux_err_nn
+
+        return flux_pre, flux_err_pre
+
+
+    def post_process(self, flux_pre, flux_err_pre=None):
+
+        if self.inverse_transform:
+            inverted = self.data.dataset.inverse_transform(flux_pre, flux_err_pre)
+            if flux_err_pre is None:
+                flux = inverted[0]
+                flux_err = None
+            else:
+                flux, flux_err = inverted
+        else:
+            flux, flux_err = flux_pre, flux_err_pre
+        
+        return flux, flux_err
+
+
+    def post_process_prediction(self, flux_nn, flux_err_nn=None):
+
+        flux_pre, flux_err_pre = self.rescale_prediction(flux_nn, flux_err_nn)
+        flux, flux_err = self.post_process(flux_pre, flux_err_pre)
+        
+        return flux, flux_err
+
     
     def loss_function(self, out, batch):
         """
         Compute total loss = in-sample MSE + (out-of-sample MSE) + KL divergence + smoothness penalty.
         """
-
-        # Energy Based Loss Component
-        energy_loss = self.energy_loss(out, batch)
+        
+        '''
 
         # Old SELDON Loss
         delta_scaler = None
@@ -462,11 +562,26 @@ class SELDONEnergyClassifierExperiment3(Experiment):
             delta_scaler = batch[self.scale_delta_by]
 
         
-        input, target, sigma = out["reconstructed"], batch["flux_full"], batch["flux_err_full"]
+        flux_nn, target, sigma = out["reconstructed"], batch["flux_full"], batch["flux_err_full"]
+        flux_err_nn = out['error'] if 'error' in out else None
+        flux_pred, flux_err_pred = self.post_process_prediction(flux_nn, flux_err_nn)
+        flux_target, flux_err_target = self.post_process(target, sigma)
+
+        if flux_err_pred is not None:
+            sigma_eff = torch.sqrt(flux_err_target**2 + flux_err_pred**2)
+        else:
+            sigma_eff = flux_err_target
+
+        input = flux_pred
+        target = flux_target
+        sigma = sigma_eff
+        '''
+
+        '''
         if not self.inverse_scale_reconstruction: # This will make log-transformed decoded fluxes predict the original flux in the true flux space
             scale = self.data.dataset.flux_normalizer.max_value
             input = (input + 0.5) / scale - 0.5 # we want predicted scaled flux f is flux_norm(semilog(F))
-            sigma = sigma / scale
+            sigma = sigma / scale # Is this wrong? Or do we do this to align?
         if self.inverse_transform:
             sigma_pred = sigma
             if 'error' in out:
@@ -478,31 +593,37 @@ class SELDONEnergyClassifierExperiment3(Experiment):
                 sigma = torch.sqrt(sigma_true**2 + sigma_pred**2)
             else:
                 sigma = sigma_true
-
+        '''
+        '''
 
         reconstruction_loss = self.recon_loss(input, target, sigma, delta_scaler) # (B, S, E)
         
         if self.weight_bands:
             reconstruction_loss *= batch["band_weight"][:, :, None]
-
+        '''
+        '''
         z_mean, z_var = out["z_mean"], out["z_var"]
         
         kl_loss = out['elbo'][:, None] # (B, Z)
-
+        '''
+        
+        '''
         if self.weight_classes:
+            
             reconstruction_loss *= batch["class_weight"][:, None, None]
             kl_loss *= batch["class_weight"][:, None]
+            
             energy_loss *= batch["class_weight"][:, None]
+        '''
 
 
         # Mean over Padding Mask
+        '''
         padding_mask = batch["pad_mask_full"].unsqueeze(-1)
-        reconstruction_loss = (padding_mask * reconstruction_loss).sum(1) / (padding_mask.sum(1))
-
-        total_loss = (
-            reconstruction_loss.mean() + self.kl_weight * kl_loss.mean() + energy_loss.mean() * self.energy_weight
-        )
-
+        reconstruction_loss = (padding_mask * reconstruction_loss).sum(1) / (padding_mask.sum(1)
+        '''
+        
+        '''
         if self.fit_redshift:
             valid_mask = (batch['redshift'] > 0)
             redshift_true = batch['redshift'][valid_mask]
@@ -515,10 +636,20 @@ class SELDONEnergyClassifierExperiment3(Experiment):
             total_loss += redshift_loss
         else:
             redshift_loss = 0.0
+        '''
 
+        # Energy Based Loss Component
+        energy_loss = self.energy_loss(out, batch)
+        reconstruction_loss = self.reconstruction_loss(out, batch)
+        kl_loss = self.kl_divergence_loss(out, batch)
+        redshift_loss = self.redshift_loss(out, batch)
+
+        total_loss = (
+            reconstruction_loss.mean() + self.kl_weight * kl_loss.mean() + energy_loss.mean() * self.energy_weight + redshift_loss.mean()
+        )
 
         return {"loss": total_loss, 'squared_error': reconstruction_loss,
-                'kl_divergence': kl_loss.mean(), "reconstruction_loss":reconstruction_loss.mean(), 'energy_loss':energy_loss.mean(), 'redshift_loss':redshift_loss}
+                'kl_divergence': kl_loss.mean(), "reconstruction_loss":reconstruction_loss.mean(), 'energy_loss':energy_loss.mean(), 'redshift_loss':redshift_loss.mean()}
 
     def plot_band_embeddings(self):
 
@@ -526,19 +657,22 @@ class SELDONEnergyClassifierExperiment3(Experiment):
             return None
 
         #IDX2NAME = {0: "g", 1: "r", 2: "i", 3: "z", 4: "y", 5: "u"}
-        BAND_COL = ["#2da328ff", "#e41a1c", "#ff7f00", "#333333", "#984ea3", "#377eb8"] + [None]*len(BAND_IDX_MAP)
-        IDX2NAME = dict(zip(BAND_IDX_MAP.values(), BAND_IDX_MAP.keys()))
+        BAND_COL = self.data.band_index_to_colors
+        IDX2NAME = self.data.index_band_map
+        #BAND_COL = ["#2da328ff", "#e41a1c", "#ff7f00", "#333333", "#984ea3", "#377eb8"] + [None]*len(self.data.band_index_map)
+        #IDX2NAME = dict(zip(self.data.band_index_map.values(), self.data.band_index_map.keys()))
 
-        band_idx = torch.arange(len(BAND_IDX_MAP), device=self.device)[:, None, None]
+        band_idx = torch.arange(len(self.data.band_index_map), device=self.device)[:, None, None]
         band_emb = self.model.decoder.get_band_embedding(band_idx).cpu().detach().numpy()
         wave = self.model.decoder.lambda_grid[0, 0, :].cpu().detach().numpy()
 
         fig = plt.figure()
-        for i in range(len(BAND_IDX_MAP)):
+        for i in range(len(self.data.band_index_map)):
             plt.step(wave, band_emb[i, 0, :, 0]/band_emb[i, 0, :, 0].max(), label=IDX2NAME[i], color=BAND_COL[i])
 
-        plt.legend()
+        plt.legend(ncols=3)
         plt.xlabel('Wavelength Grid')
+        plt.xscale('log')
         plt.ylabel('Normalized Band Embedding')
 
         return fig
@@ -556,7 +690,7 @@ class SELDONEnergyClassifierExperiment3(Experiment):
         return results
 
     def validation_step(self, batch, batch_idx):
-        #torch.compiler.cudagraph_mark_step_begin()
+        
         out = self(batch)
 
         loss = self.loss_function(out, batch)
@@ -573,7 +707,14 @@ class SELDONEnergyClassifierExperiment3(Experiment):
         self.validation_step_outputs.append(result)
         return result
 
+    def on_train_epoch_start(self):
+        torch.compiler.cudagraph_mark_step_begin()
+        self.model.train()
+        
+
     def on_validation_epoch_start(self):
+        torch.compiler.cudagraph_mark_step_begin()
+        
         self.validation_step_outputs.clear()
 
     def on_validation_epoch_end(self):

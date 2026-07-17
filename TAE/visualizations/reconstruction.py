@@ -19,6 +19,7 @@ def sigma_log_to_linear(s_log, f_lin):
 
 BAND_COL = ["#2da328ff", "#e41a1c", "#ff7f00", "#333333", "#984ea3", "#377eb8"] + [None]*len(BAND_IDX_MAP)
 IDX2NAME = dict(zip(BAND_IDX_MAP.values(), BAND_IDX_MAP.keys()))
+
 #BAND_COL = ["#4daf4a", "#e41a1c", "#ff7f00", "#333333", "#984ea3", "#377eb8"]
 #IDX2NAME = {0:"g", 1:"r", 2:"i", 3:"z", 4:"y", 5:"u"}
 TIME_SCALE = 1.0
@@ -26,7 +27,11 @@ TIME_SCALE = 1.0
 
 
 def plot_full_multiband_dense_plot(experiment, batch, idx, device, ax=None, dense_pts=300, inverse_scale_reconstruction=True):
-
+    torch.compiler.cudagraph_mark_step_begin()
+    #BAND_COL = ["#2da328ff", "#e41a1c", "#ff7f00", "#333333", "#984ea3", "#377eb8"] + [None]*len(experiment.data.band_index_map)
+    #IDX2NAME = dict(zip(experiment.data.band_index_map.values(), experiment.data.band_index_map.keys()))
+    BAND_COL = experiment.data.band_index_to_colors
+    IDX2NAME = experiment.data.index_band_map
     model = experiment.model
     if ax is None:
         fig = plt.figure()

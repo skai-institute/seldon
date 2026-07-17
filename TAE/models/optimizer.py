@@ -3,6 +3,7 @@ import typing
 #import torch_optimizer as torch_optim
 from torch import optim
 from TAE.models.scheduler import SquareRootWarmupScheduler
+from TAE.util import register_module
 
 
 # from models.scheduler import CosineWarmupScheduler
@@ -85,7 +86,34 @@ class Ranger:
 #         )
 #         return (optimizer,)
 
+@register_module
+class NAdam:
+    def __init__(
+        self,
+        LR,
+        weight_decay=0,
+        scheduler=None,
+        **kwargs,
+    ):
+        self.lr = LR
+        self.weight_decay = weight_decay
+        self.scheduler = scheduler
 
+    def __call__(self, model):
+
+        optims = optim.NAdam(
+            model.parameters(),
+            lr=self.lr,
+            weight_decay=self.weight_decay,
+        )
+
+        if self.scheduler is not None:
+            scheduler = self.scheduler(optims)
+            return [optims], [{"scheduler": scheduler, "interval": "step"}]
+        
+        return optims
+
+@register_module
 class Adam:
     def __init__(
         self,

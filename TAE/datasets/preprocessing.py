@@ -30,6 +30,36 @@ class IndexAugmentation:
         return np.arange(len(data))
 
 @register_module
+class PercentileSample(IndexAugmentation):
+
+    def __init__(self, min_points=1, percentile=100.0, **kwargs):
+        super().__init__(min_points=min_points, **kwargs)
+        self.percentile = percentile
+
+    def transform(self, data, *args):
+
+        assert data.shape[1] == 4, "Error, detection-flags are not in the data"
+        n_obs_cum = np.cumsum(data[:, 3].to(int), axis=0)
+        n_cutoff_obs = int((np.sum(data[:, 3].to(int), axis=0) * self.percentile / 100))
+        cutoff_point = (n_obs_cum <= n_cutoff_obs).sum(dim=1)
+        augmentation_index = np.arange(cutoff_point)
+ 
+        return augmentation_index
+
+@register_module
+class NonDetectionDropoutSample(IndexAugmentation):
+
+    def __init__(self, min_points=1, **kwargs):
+        super().__init__(min_points=min_points, **kwargs)
+
+    def transform(self, data, *args):
+
+        assert data.shape[1] == 4, "Error, detection-flags are not in the data"
+        augmentation_index = np.nonzero(data[:, 3])[0]
+ 
+        return augmentation_index
+
+@register_module
 class SparseSample(IndexAugmentation):
 
 

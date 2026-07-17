@@ -359,7 +359,7 @@ class SELDONEnergyClassifierDictModel(nn.Module):
 
         self.apply(init_weights)
 
-    def predict_class(self, energy_continuum):
+    def predict_class(self, energy_continuum, probs=False):
 
         batch_size, latent_dim = energy_continuum.shape
         class_idx = torch.arange(self.num_classes, device=energy_continuum.device).reshape(1, -1) # 1 x Trial
@@ -367,8 +367,34 @@ class SELDONEnergyClassifierDictModel(nn.Module):
         continuum_trials = energy_continuum.reshape(batch_size, 1, latent_dim).expand(-1, self.num_classes, -1) # B x Trial x Latent
         energy_inputs = torch.cat([continuum_trials, class_trials], dim=-1)
         energy_c_given_z = self.energy_model(energy_inputs).sum(dim=-1) # batch_size x Trials, sum gets rid of last dim
+        if probs:
+            return F.softmax(energy_c_given_z, dim=-1)
         class_idx = torch.argmax(energy_c_given_z, dim=-1)
         return class_idx
+
+    def predict_flux_err(self, reconstructed_flux, band_idx, decoder_inputs):
+        if self.uq_net is not None:
+            error = F.softplus(
+                    self.uq_net(
+                        torch.cat(
+                            [
+                                reconstructed_flux, 
+                                self.decoder.band_emb(
+                                    band_idx[:, :, 0]
+                                ), 
+                                decoder_inputs[:, None, :].expand(-1, reconstructed_flux.shape[1], -1),
+                                t,
+                            ], 
+                            dim=-1
+                        )
+                    )
+            )
+            return error
+        else:
+            return None
+
+
+
 
     def forward(self, x, t, band_idx_part, band_idx_full, mask=None, class_idx=None, *args, **kwargs):
         """
@@ -386,7 +412,7 @@ class SELDONEnergyClassifierDictModel(nn.Module):
         """
         # In this model, x will either be a dictionary or tuple of items
         
-        memory, encoded_sequence = self.encoder(x, band_idx_part, mask=mask, return_sequence=True)
+        memory, encoded_sequence = self.encoder(x, band_idx_part, mask=mask, return_sequence=False)
         z_mean, z_sigma = self.distribution_model(memory)
         z_sample = self.approximate_posterior.sample(z_mean, z_sigma)
         
@@ -444,7 +470,7 @@ class SELDONEnergyClassifierDictModel(nn.Module):
         Encode input sequence into latent z.
         """
         with torch.no_grad():
-            encoded_sequence, memory = self.encoder(x, band_idx_part, mask=mask)
+            memory, encoded_sequence = self.encoder(x, band_idx_part, mask=mask)
             z_mean, z_sigma = self.distribution_model(memory)
             z_sample = self.approximate_posterior.sample(z_mean, z_sigma)
             

@@ -402,7 +402,7 @@ class RecurrentODEEncoderV2(nn.Module):
 
         if return_sequence:
             return h_n, h_s
-        return h_n
+        return h_n, None
 
 @register_module
 class RecurrentODEEncoder(nn.Module):

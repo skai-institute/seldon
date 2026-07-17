@@ -19,6 +19,7 @@ from TAE.models.loss import *
 from TAE.models.embeddings import *
 from TAE.models.seldon import *
 from TAE.energy import *
+from TAE.finetuning import LoRATuner
 
 # from TAE.experiments.autoencoder_experiment import Experiment, AutoencoderExperiment
 

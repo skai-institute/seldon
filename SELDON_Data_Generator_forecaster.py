@@ -439,7 +439,7 @@ if __name__ == "__main__":
                 {"model": model, "data": data, **config["exp_params"]["config"]},
             )
             #experiment.model.energy_model = experiment.energy_model
-            experiment.model.energy_model = experiment.energy_model
+            #experiment.model.energy_model = experiment.energy_model
             device = 'cuda'
             weights = torch.load(weights_file, map_location=torch.device(device))['state_dict']
             #experiment.load_state_dict(weights)

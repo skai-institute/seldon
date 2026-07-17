@@ -1233,6 +1233,7 @@ class SpectrumBasisDecoder(nn.Module):
         use_modular_basis: bool = False,
         wave_min=None,
         wave_max=None,
+        bandpass_embedding=None,
         **kwargs,
     ):
         super().__init__()
@@ -1261,7 +1262,15 @@ class SpectrumBasisDecoder(nn.Module):
         self.dof = 3 # (global_offset, global_amplitude, redshift)
         self.input_dim = latent_dim
 
-        if self.band_embedding_files is not None:
+        if bandpass_embedding is not None: # Use the BandPassEmbeddings from TAE.models.embedding.py
+
+            self.band_emb = bandpass_embedding
+            lambda_grid = self.band_emb.lambda_grid
+            self.band_emb_dim = self.band_emb.embedding_dim
+            NUM_BANDS = self.band_emb.emb.num_embeddings
+            BAND_EMB_DIM = self.band_emb_dim
+
+        elif self.band_embedding_files is not None:
             lambda_grid, filters = map_transmission_filters(self.band_embedding_files, n_points=BAND_EMB_DIM, wave_min=wave_min, wave_max=wave_max)
             band_idx = [BAND_IDX_MAP[key] for key in filters]
             throughput = np.vstack(list(filters.values())).astype(np.float32)
@@ -1363,7 +1372,7 @@ class SpectrumBasisDecoder(nn.Module):
 
         #self.basis.compile()
         #self.to_params.compile()
-        self.compile()
+        self.compile(mode='max-autotune')
 
 
     def set_parameter_names(self):

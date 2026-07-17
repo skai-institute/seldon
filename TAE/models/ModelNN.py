@@ -4,6 +4,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.parameter import Parameter
 from TAE.util import register_module
+import math
 
 # TODO: inherit ResNet and DenseNet from MLP.
 
@@ -560,6 +561,41 @@ class MultiHeadLinearBlock(nn.Module):
         x_shape = x.shape
         x = x.reshape(-1, self.in_features, 1) # (* x n_features x 1)
         return self.multihead_linear(x).reshape(*x_shape[:-1], self.out_features) # (* x n_output)
+
+@register_module
+class FastMultiHeadLinearBlock(nn.Module):
+
+    def __init__(self, in_features, out_features=None, bias=True, n_heads=1):
+        super().__init__()
+
+        self.in_features = in_features
+        self.n_heads = n_heads
+        self.out_features = in_features if out_features is None else out_features
+        assert in_features / n_heads == in_features//n_heads, f"n_features ({in_features}) must be divisible by n_heads ({n_heads})"
+        assert self.out_features / n_heads == self.out_features//n_heads, f"n_output ({out_features}) must be divisible by n_heads ({n_heads})"
+
+        # n_networks = n_heads
+        # in_channels -> n_features
+        # groups -> n_networks
+
+        k = int(math.sqrt(in_features))
+        self.features_per_head = in_features // n_heads
+
+        self.weight = nn.Parameter(torch.rand(1, n_heads, out_features//n_heads, self.features_per_head, requires_grad=True) * 2*k - k)
+        if bias:
+            self.bias = nn.Parameter(torch.rand(out_features, requires_grad=True) * 2*k - k)
+        else:
+            self.bias = None
+
+    def forward(self, x):
+        # Assume x is of shape (* x n_features)
+
+        shape = x.shape
+        if self.bias is not None:
+            return torch.matmul(self.weight, x.view(*shape[:-1], self.n_heads, self.features_per_head, 1)).view(*shape[:-1], self.out_features) + self.bias
+        else:
+            return torch.matmul(self.weight, x.view(*shape[:-1], self.n_heads, self.features_per_head, 1)).view(*shape[:-1], self.out_features)
+
 
 
 @register_module

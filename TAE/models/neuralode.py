@@ -7,6 +7,63 @@ from torchdiffeq import odeint_adjoint as odeint
 import torchode as tode
 
 @register_module
+class ExponentialODESolver(nn.Module):
+    '''Use a first-order exponential integrator to solve 
+    the differential equation
+
+    y' = -A y + f(y)
+
+    where f(y) is a provided function.
+    This integrator has the advantage of requiring only
+    single evaluations in the RNN loop
+    and acts as a residual connection
+    on the exponential decay of information
+    between successive points'''
+
+    def __init__(self, ode_net, A0=0.0, fixed_solver_steps=1, epsilon=1e-4):
+
+        super().__init__()
+        self.ode_net = ode_net
+        self.A0 = nn.Parameter(torch.tensor(A0, requires_grad=True))
+        self.softplus = nn.Softplus()
+        self.fixed_solver_steps = fixed_solver_steps
+        self.epsilon = epsilon
+
+    @property
+    def A(self):
+
+        return self.softplus(self.A0) + self.epsilon
+
+    def step(self, x0, h):
+
+        coeff = torch.exp(-self.A*h)
+
+        return coeff * x0 + (1 - coeff) / self.A * self.ode_net(x0)
+
+    def solve(self, x, t_eval=None, t_start=None, t_end=None):
+
+        # t_eval is B, S or S
+        # t_start and t_end are B
+        if t_eval is None:
+            uniform_grid = torch.linspace(0, 1.0, self.fixed_solver_steps, device=x.device)
+            t_eval = uniform_grid[None, :] * (t_end - t_start)[:, None] + t_start[:, None]
+        dts = t_eval[..., 1:] - t_eval[..., -1]
+        out_length = t_eval.shape[-1]
+        out_tensors = [x]
+        for dt in dts.unbind(-1):
+            out_tensors.append(self.step(out_tensors[-1], dt))
+
+        return t_eval, torch.stack(out_tensors, dim=-2)
+
+
+
+    def forward(self, x, t_eval=None, t_start=None, t_end=None):
+
+        ts, ys = self.solve(x=x, t_eval=t_eval, t_start=t_start, t_end=t_end)
+
+        return ts, ys
+
+@register_module
 class ODESolver(nn.Module):
 
     def __init__(self, ode_net, atol=1e-6, rtol=1e-3, pcoeff=0.2, icoeff=0.5, 
@@ -138,7 +195,40 @@ class RNNODECell(nn.Module):
         if hx is None:
             hx = torch.zeros(batch_size, self.hidden_size, device=x0.device)
   
-        hx = torch.where((t0 == t1)[..., None], hx, self.ode_solver(hx, t_start=t0, t_end=t1)[1][..., -1, :])
+        #hx = torch.where((t0 == t1)[..., None], hx, self.ode_solver(hx, t_start=t0, t_end=t1)[1][..., -1, :])
+        hx = torch.where(mask0[..., None], hx, self.ode_solver(hx, t_start=t0, t_end=t1)[1][..., -1, :])
+        hx = torch.where(mask1[..., None], self.rnn_cell(x1, hx), hx)
+
+        return hx
+
+@register_module
+class PaddedRNNODECell(nn.Module):
+
+    def __init__(self, rnn_cell, ode_solver):
+        # NOTE: This will have issues when not using the fixed solver as it will not check if integrating from t0=t1
+
+        super().__init__()
+
+        self.rnn_cell = rnn_cell
+        self.ode_solver = ode_solver
+
+        self.hidden_size = self.rnn_cell.hidden_size
+        self.input_size = self.rnn_cell.input_size
+
+    #@torch.jit.export
+    def forward(self, x0, x1, t0, t1, mask0, mask1, hx=None):
+        # RNNUpdate and ODE Intgrate from t0 to t1
+        # x0, x1: (batch_size x num_features)
+        # t0, t1: (batch_size)
+        # mask0, mask1: (batch_size)
+        # mask0 is the padding mask
+        # mask1 is the skip mask
+
+        batch_size = x0.size(0)
+        if hx is None:
+            hx = torch.zeros(batch_size, self.hidden_size, device=x0.device)
+  
+        hx = torch.where(mask0[..., None], hx, self.ode_solver(hx, t_start=t0, t_end=t1)[1][..., -1, :])
         hx = torch.where(mask1[..., None], self.rnn_cell(x1, hx), hx)
 
         return hx
@@ -184,13 +274,14 @@ class LNGRUCell(nn.Module):
 @register_module
 class RNNODEEncoderV2(nn.Module):
 
-    def __init__(self, rnn_ode_cell, use_class_token=False):
+    def __init__(self, rnn_ode_cell, use_class_token=False, return_sequence=False):
 
         super().__init__()
         self.rnn_ode_cell = rnn_ode_cell
         self.integrator = rnn_ode_cell.ode_solver
         self.hidden_size = self.rnn_ode_cell.hidden_size
         self.use_class_token = use_class_token
+        self.return_sequence = return_sequence
 
         if self.use_class_token:
             self.class_token = nn.Parameter(torch.randn(1, self.hidden_size, requires_grad=True))
@@ -198,7 +289,7 @@ class RNNODEEncoderV2(nn.Module):
             self.class_token = 0
 
     @torch.jit.export
-    def forward(self, x, t, mask, hx=None, reverse=True):
+    def forward(self, x, t, mask, hx=None, reverse=True, pad_mask=None):
 
         # RNNUpdate and ODE Intgrate from t0 to t1
         # x: (batch_size x sequence_length x num_features)
@@ -211,28 +302,46 @@ class RNNODEEncoderV2(nn.Module):
             hx = torch.zeros(batch_size, self.hidden_size, device=x.device) + self.class_token
 
         if reverse:
-            x0, x1, t0, t1, mask0, mask1 = x[..., 1:, :], x[..., :-1, :], t[..., 1:], t[..., :-1], mask[..., 1:], mask[..., :-1]
-        else:
-            x0, x1, t0, t1, mask0, mask1 = x[..., :-1, :], x[..., 1:, :], t[..., :-1], t[..., 1:], mask[..., :-1], mask[..., 1:]
+            x0, x1, t0, t1, mask0_, mask1 = x[..., 1:, :], x[..., :-1, :], t[..., 1:], t[..., :-1], mask[..., 1:], mask[..., :-1]
+            if pad_mask is not None:
+                mask0 = ~pad_mask[..., 1:]
+            else:
+                #mask0 = mask0_
+                #mask0 = t0 == t1 # This is an inverted mask where True skips the ode.  Integrating 0 time has numerical stability issues with adaptive solvers
+                mask0 = (~torch.cummax(mask0_.flip(dims=(-1,)), dim=-1).values.flip(dims=(-1,))) | (t0 == t1)
 
+        else:
+            x0, x1, t0, t1, mask0_, mask1 = x[..., :-1, :], x[..., 1:, :], t[..., :-1], t[..., 1:], mask[..., :-1], mask[..., 1:]
+            if pad_mask is not None:
+                mask0 = ~pad_mask[..., :-1]
+            else:
+                #mask0 = mask0_
+                #mask0 = t0 == t1
+                mask0 = (~torch.cummax(mask0_, dim=-1).values) | (t0 == t1)
 
         h_t_minus_1 = hx.clone()
         h_t = hx.clone()
-        outputs = []
+        if self.return_sequence:
+            outputs = []
+        else:
+            outputs = None
         i = 0
         if reverse: i = sequence_length - 1 - i
         h_t = torch.where(mask[..., i, None], self.rnn_ode_cell.rnn_cell(x[..., i, :], hx=h_t_minus_1),  h_t_minus_1)
-        outputs.append(h_t.clone())
+        if self.return_sequence:
+            outputs.append(h_t.clone())
         h_t_minus_1 = h_t.clone()
 
         for i in range(sequence_length - 1):
             if reverse: i = sequence_length - 2 - i
             h_t = self.rnn_ode_cell(x0[..., i, :], x1[..., i, :], t0[..., i], t1[..., i], mask0[..., i], mask1[..., i], hx=h_t_minus_1)
-            outputs.append(h_t.clone())
+            if self.return_sequence:
+                outputs.append(h_t.clone())
             h_t_minus_1 = h_t.clone()
 
-        outputs = torch.stack(outputs)
-        outputs = outputs.transpose(0, 1).contiguous()
+        if self.return_sequence:
+            outputs = torch.stack(outputs)
+            outputs = outputs.transpose(0, 1).contiguous()
 
         return outputs, h_t
 
@@ -359,7 +468,7 @@ class RNNODEEncoder(nn.Module):
         if hx is None:
             hx = torch.zeros(batch_size, self.hidden_size, device=x.device) + self.class_token
         h_t_minus_1 = hx
-        h_t = hx12957
+        h_t = hx
 
         # TODO: This function is wrong if there is sparse masked points (or band masks!)
         # The h_p's need to be maintained when evolved to masked points in time

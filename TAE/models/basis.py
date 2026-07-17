@@ -72,13 +72,13 @@ class TimeBasis(nn.Module):
         t = time[..., None] # B x S x 1 x 1
         latent_enc = self.latent_encoding(features[..., None, None, :]) # B x 1 x 1 x n_features -> emb_dim
 
-        amplitude, rise_rate, decline_rate, offset, width = [nn(latent_enc) for nn in self.neural_network] # 5 (B x 1 x 1 x n_output)
+        amplitude_, rise_rate_, decline_rate_, offset_, width_ = [nn(latent_enc.clone()) for nn in self.neural_network] # 5 (B x 1 x 1 x n_output)
 
-        amplitude = self.sigmoid(amplitude)
-        rise_rase = self.softplus(rise_rate)
-        decline_rate = self.softplus(decline_rate)
-        offset = offset - torch.mean(offset, dim=(-1,), keepdims=True)
-        width = self.softplus(width)
+        amplitude = self.sigmoid(amplitude_)
+        rise_rate = self.softplus(rise_rate_)
+        decline_rate = self.softplus(decline_rate_)
+        offset = offset_ - torch.mean(offset_, dim=(-1,), keepdims=True)
+        width = self.softplus(width_)
 
         basis = self.basis(t, amplitude, rise_rate, decline_rate, offset, width)
 
@@ -160,7 +160,7 @@ class SpectrumBasis(nn.Module):
         # Typically * is batch_size x num_basis
 
         if self.use_modular_basis:
-            return self.wave_basis(wavelength, features), self.time_basis(time, features)
+            return self.wave_basis(wavelength, features.clone()), self.time_basis(time, features.clone())
 
         wavelength_shape = wavelength.shape
         time_shape = time.shape

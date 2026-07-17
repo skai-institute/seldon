@@ -65,6 +65,7 @@ class LightCurvePreprocessor(Dataset):
         force_zero_non_detections=False, # when resampling, keep non-detections as zero
         gumbel_transform=False,
         cache_normalized=False,
+        update_resampled_non_detection_flags=False,
         **kwargs,
     ):
         if len(kwargs):
@@ -78,6 +79,7 @@ class LightCurvePreprocessor(Dataset):
         self.band_indices = band_indices
         self.band_weights = band_weights
         self.cache_normalized = cache_normalized
+        self.update_resampled_non_detection_flags = update_resampled_non_detection_flags
 
         self.meta_data = meta_data
         
@@ -189,6 +191,9 @@ class LightCurvePreprocessor(Dataset):
         # Resample the light curve
         if self.resample:
             light_curve[:, 1] = light_curve[:, 1] + np.random.randn(*light_curve[:, 1].shape) * light_curve[:, 2]
+            if self.update_resampled_non_detection_flags:
+                meta_data = meta_data.copy()
+                meta_data[light_curve[:, 1] < 4*light_curve[:, 2], 0] = 0.0
             if self.meta_data is not None and self.force_zero_non_detections:
                 light_curve[meta_data[:, 0]==0.0, 1] = 0.0
 
@@ -231,13 +236,14 @@ class LightCurvePreprocessor(Dataset):
             "scale": self.flux_normalizer.max_value,
         }
 
-        output.update({'meta_data':None, 'redshift':None})
+        output.update({'meta_data':None, 'redshift':None, 'redshift_error': None})
         if self.meta_data is not None:
             output.update({"meta_data": torch.from_numpy(np.pad(meta_data, ((0, pad_length), (0, 0))))})
             if 'REDSHIFT_FINAL' in self.meta_data:
                 output.update({'redshift': self.meta_data['REDSHIFT_FINAL'][index]})
+            if 'REDSHIFT_FINAL_ERR' in self.meta_data:
+                output.update({'redshift_error': self.meta_data['REDSHIFT_FINAL_ERR'][index]})
 
-        
 
         light_curve_part = light_curve[augmentation_mask[: len(light_curve)]]
         pad_length = self.max_points - len(light_curve_part) # note: max_points here vs max_length above

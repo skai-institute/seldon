@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 import numpy as np
 import torch
+from TAE.datasets.bandpasses import BAND_IDX_MAP
 
 # Mapping of band names to integer codes
 BAND_IDX_MAP = {

@@ -10,6 +10,7 @@ from TAE.util import extract_curves_from_filtered_data
 import pickle
 from pathlib import Path
 from TAE.util import registry
+import TAE.datasets.bandpasses
 
 MODULES = {
     "YSEData": JSONDataLoader,

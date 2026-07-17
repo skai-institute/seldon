@@ -179,7 +179,9 @@ class BlockedGibbsSampler:
         # because we are only interested in the gradients of the input.
         is_training = self.model.training
         self.model.eval()
-        for p in self.model.parameters():
+        previously_had_grad = {}
+        for name, p in self.model.named_parameters():
+            previously_had_grad[name] = p.requires_grad
             p.requires_grad = False
         inp_latent.requires_grad = True
         #inp_classes.requires_grad = True
@@ -233,8 +235,8 @@ class BlockedGibbsSampler:
             
 
         # Reactivate gradients for parameters for training
-        for p in self.model.parameters():
-            p.requires_grad = True
+        for name, p in self.model.named_parameters():
+            p.requires_grad = previously_had_grad[name]
         self.model.train(is_training)
 
         # Reset gradient calculation to setting before this function
@@ -273,7 +275,7 @@ class BlockedGibbsEmbeddingSampler:
         self.example_latents = [torch.randn((1, latent_dim)) for _ in range(self.sample_size)]
         self.example_classes = [torch.randint(0, self.num_classes, (1,), dtype=torch.long) for _ in range(self.sample_size)]
 
-    def sample_new_exmps(self, steps=60, step_size=10, device=None, temperature=1.0):
+    def sample_new_exmps(self, steps=60, step_size=10, device=None, temperature=1.0, *energy_args, **energy_kwargs):
         """
         Function for getting a new batch of "fake" images.
         Inputs:
@@ -290,7 +292,7 @@ class BlockedGibbsEmbeddingSampler:
         inp_classes = torch.cat([rand_classes, old_classes], dim=0).detach().to(device)
 
         # Perform MCMC sampling
-        inp_latents, inp_classes = self.generate_samples(inp_latents, inp_classes, steps=steps, step_size=step_size, temperature=temperature, return_index=True)
+        inp_latents, inp_classes = self.generate_samples(inp_latents, inp_classes, steps=steps, step_size=step_size, temperature=temperature, return_index=True, *energy_args, **energy_kwargs)
 
         # Add new images to the buffer and remove old ones if needed
         self.example_latents = list(inp_latents.to(torch.device("cpu")).chunk(self.sample_size, dim=0)) + self.example_latents
@@ -301,7 +303,7 @@ class BlockedGibbsEmbeddingSampler:
         return inp_latents, inp_classes
 
  
-    def generate_samples(self, inp_latent, inp_classes, steps=60, step_size=10, return_per_step=False, device=None, temperature=1.0, return_index=False, sample_classes=True, sample_latent=True):
+    def generate_samples(self, inp_latent, inp_classes, steps=60, step_size=10, return_per_step=False, device=None, temperature=1.0, return_index=False, sample_classes=True, sample_latent=True,  *energy_args, **energy_kwargs):
         """
         Function for sampling images for a given model.
         Inputs:
@@ -315,7 +317,9 @@ class BlockedGibbsEmbeddingSampler:
         # because we are only interested in the gradients of the input.
         is_training = self.model.training
         self.model.eval()
-        for p in self.model.parameters():
+        previously_had_grad = {}
+        for name, p in self.model.named_parameters():
+            previously_had_grad[name] = p.requires_grad
             p.requires_grad = False
         inp_latent.requires_grad = True
         #inp_classes.requires_grad = True
@@ -347,7 +351,7 @@ class BlockedGibbsEmbeddingSampler:
                 #inp_latent.data.clamp_(min=-5.0, max=5.0)
 
                 # Part 2: calculate gradients for the current input.
-                out_latent = -self.model(torch.cat([inp_latent, self.model.class_embedding(inp_classes)], dim=-1))/temperature
+                out_latent = -self.model(torch.cat([inp_latent, self.model.class_embedding(inp_classes)], dim=-1), *energy_args, **energy_kwargs)/temperature
                 out_latent.sum().backward()
                 #inp_latent.grad.data.clamp_(-0.03, 0.03) # For stabilizing and preventing too high gradients
 
@@ -373,7 +377,7 @@ class BlockedGibbsEmbeddingSampler:
                 class_trials = self.model.class_embedding(class_idx).expand(batch_size, -1, -1).to(inp_latent.device) # B x Trial x Emb
                 continuum_trials = inp_latent.reshape(batch_size, 1, latent_dim).expand(-1, self.num_classes, -1) # B x Trial x Latent
                 energy_inputs = torch.cat([continuum_trials, class_trials], dim=-1)
-                energy_c_given_z = self.model(energy_inputs).sum(dim=-1) / temperature# batch_size x Trials, sum gets rid of last dim
+                energy_c_given_z = self.model(energy_inputs,  *energy_args, **energy_kwargs).sum(dim=-1) / temperature# batch_size x Trials, sum gets rid of last dim
                 inp_classes = torch.multinomial(self.softmax(energy_c_given_z), 1).squeeze(1)
                 #class_sample_index
                 #inp_classes = torch.argmax(energy_c_given_z, dim=-1)
@@ -383,7 +387,7 @@ class BlockedGibbsEmbeddingSampler:
                 q1 = 0
                 if sample_latent:
                     x0.requires_grad = True
-                    E = self.model(torch.cat([x0, self.model.class_embedding(c0)], dim=-1)) / temperature
+                    E = self.model(torch.cat([x0, self.model.class_embedding(c0)], dim=-1),  *energy_args, **energy_kwargs) / temperature
                     E.sum().backward()
                     
                     
@@ -398,7 +402,7 @@ class BlockedGibbsEmbeddingSampler:
                     x1 = inp_latent.clone().detach()
                     x1.requires_grad = True
                     c1 = inp_classes.clone()
-                    E = self.model(torch.cat([x1, self.model.class_embedding(c1)], dim=-1)) / temperature
+                    E = self.model(torch.cat([x1, self.model.class_embedding(c1)], dim=-1), *energy_args, **energy_kwargs) / temperature
                     E.sum().backward()
                     
                     del_x1 = x1.grad.data.detach()
@@ -417,12 +421,12 @@ class BlockedGibbsEmbeddingSampler:
                     class_trials = self.model.class_embedding(class_idx).expand(batch_size, -1, -1).to(inp_latent.device) # B x Trial x Emb
                     continuum_trials = x0.reshape(batch_size, 1, latent_dim).expand(-1, self.num_classes, -1) # B x Trial x Latent
                     energy_inputs = torch.cat([continuum_trials, class_trials], dim=-1)
-                    energy_c_given_z = self.model(energy_inputs).sum(dim=-1) # batch_size x Trials, sum gets rid of last dim
+                    energy_c_given_z = self.model(energy_inputs,  *energy_args, **energy_kwargs).sum(dim=-1) # batch_size x Trials, sum gets rid of last dim
                     p_c0 = self.softmax(energy_c_given_z)
 
                     continuum_trials = x1.reshape(batch_size, 1, latent_dim).expand(-1, self.num_classes, -1) # B x Trial x Latent
                     energy_inputs = torch.cat([continuum_trials, class_trials], dim=-1)
-                    energy_c_given_z = self.model(energy_inputs).sum(dim=-1) # batch_size x Trials, sum gets rid of last dim
+                    energy_c_given_z = self.model(energy_inputs,  *energy_args, **energy_kwargs).sum(dim=-1) # batch_size x Trials, sum gets rid of last dim
                     p_c1 = self.softmax(energy_c_given_z)
 
                     # Figure out the grad of the transition probabilities between embedding vectors
@@ -466,8 +470,8 @@ class BlockedGibbsEmbeddingSampler:
             
 
         # Reactivate gradients for parameters for training
-        for p in self.model.parameters():
-            p.requires_grad = True
+        for name, p in self.model.named_parameters():
+            p.requires_grad = previously_had_grad[name]
         self.model.train(is_training)
 
         # Reset gradient calculation to setting before this function

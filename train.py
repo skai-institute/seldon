@@ -1,12 +1,12 @@
 import os
 #os.environ['TORCH_COMPILE_DISABLE'] = '1'
 #os.environ["HYDRA_FULL_ERROR"] = "1"
-#os.environ['CUDA_LAUNCH_BLOCKING'] = "0"
 #os.environ['TORCH_USE_CUDA_DSA'] = "1"
 #os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 import logging
 import sys
+import numpy as np
 import hydra
 import lightning.pytorch as pl
 import torch.backends.cudnn as cudnn
@@ -23,6 +23,7 @@ from TAE.util import fill_config
 from TAE.datasets import dataset_factory
 
 import torch
+#torch.autograd.set_detect_anomaly(True)
 
 
 torch.set_float32_matmul_precision('high')
@@ -30,7 +31,7 @@ torch.set_num_threads(int(os.environ['OMP_NUM_THREADS']))
 torch.set_num_interop_threads(int(os.environ['OMP_NUM_THREADS']))
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-torch.autograd.set_detect_anomaly(True)
+
 #torch._inductor.config.triton.cudagraph_skip_dynamic_graphs=True
 #torch._dynamo.config.capture_scalar_outputs = True
 #torch._dynamo.config.recompile_limit = 12
@@ -69,7 +70,7 @@ def main(cfg: DictConfig) -> None:
 
     # === Load model ===
     model = get_module(config["model_params"]["name"], config["model_params"]["config"])
-    #model.compile(mode="reduce-overhead")
+    model.compile()
 
     # === Prepare datamodule manually ===
     data = get_dataset(config["dataset"]["name"], config["dataset"]["config"])
@@ -79,6 +80,10 @@ def main(cfg: DictConfig) -> None:
     config["dataset"]["config"]["flux_stats"] = data.flux_stats
     config["dataset"]["config"]["band_weights"] = data.band_weights
     config["dataset"]["config"]["class_map"] = data.class_map
+    with open_dict(cfg):
+        cfg.dataset.config.flux_stats = {key: float(value) if isinstance(value, np.float32) else value for key, value in data.flux_stats.items()}
+        cfg.dataset.config.band_weights = {key: float(value) if isinstance(value, np.float64) else value for key, value in data.band_weights.items()}
+        cfg.dataset.config.class_map =  {key: int(value) if isinstance(value, np.float32) else value for key, value in data.class_map.items()}
 
     # === Load experiment wrapper ===
     experiment = get_experiment(
