@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "seldon_core"
-version = "1.1.0"
+version = "1.2.0"
 description = "SELDON transient foundation model library (TAE), installable under the seldon_core distribution name for downstream consumers such as seldon-dsb."
 readme = "README.md"
 requires-python = ">=3.12"
