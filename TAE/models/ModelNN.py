@@ -4,9 +4,9 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.parameter import Parameter
 from TAE.util import register_module
+import math
 
 # TODO: inherit ResNet and DenseNet from MLP.
-
 
 @register_module
 class BatchLookup(nn.Module):
@@ -69,9 +69,82 @@ class ExponentialDistriubtionQuantileMapping(nn.Module):
 
 
 @register_module
+class ClassEmbedding(nn.Module):
+
+    def __init__(self, num_classes, embedding_dim, scale_grad_by_freq=False):
+
+        super().__init__()
+        self.num_classes = num_classes
+        self.embedding_dim = embedding_dim
+
+        self.embedding = nn.Embedding(num_classes, embedding_dim, scale_grad_by_freq=scale_grad_by_freq)
+
+    def forward(self, class_idx):
+
+        return self.embedding(class_idx)
+
+
+
+class DictModel(nn.Module):
+
+    '''
+    Essentially a module dict but the forward method return a dictionary of the results
+    '''
+    def __init__(self, **modules):
+
+        super().__init__()
+
+        self.modules = nn.ModuleDict(modules)
+
+    def forward(self, x):
+
+        return {key: self.modules[key](x) for key in modules}
+
+@register_module
+class NormalDistributionModel(nn.Module):
+
+    def __init__(self, input_dim, output_dim, epsilon=1e-4):
+
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.epsilon = epsilon
+
+        self.fc_mean = nn.Linear(input_dim, output_dim)
+        self.fc_sigma = nn.Sequential(nn.Linear(input_dim, output_dim), nn.Softplus())
+
+    def forward(self, x):
+
+        mean = self.fc_mean(x)
+        sigma = self.fc_sigma(x) + self.epsilon
+
+        return mean, sigma
+
+@register_module
+class ApproximatePosterior:
+
+    def sample(self, mean, sigma):
+
+        eps = torch.randn_like(sigma)
+        z = mean + eps * sigma
+
+        return z
+    
+    def kl_divergence_(self, mean, var):
+
+        return -0.5 * (1 + torch.log(var) - torch.square(mean) - var)
+    
+    def kl_divergence(self, mean, var):
+
+        return torch.sum(self.kl_divergence_(mean, var), dim=-1)
+
+
+
+@register_module
 class VariationalComponent(nn.Module):
 
-    def __init__(self, input_dim, output_dim, epsilon=1e-4, variational=True):
+    def __init__(self, input_dim, output_dim, epsilon=1e-4, variational=True, scale_sigma_by_number=False):
 
         super().__init__()
 
@@ -79,6 +152,7 @@ class VariationalComponent(nn.Module):
         self.output_dim = output_dim
         self.variational = variational
         self.epsilon = epsilon
+        self.scale_sigma_by_number = scale_sigma_by_number
 
         self.fc_mean = nn.Linear(input_dim, output_dim)
         self.fc_sigma = nn.Sequential(nn.Linear(input_dim, output_dim), nn.Softplus())
@@ -90,10 +164,13 @@ class VariationalComponent(nn.Module):
 
         return z
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
 
         z_mean = self.fc_mean(x)
         z_sigma = self.fc_sigma(x) + self.epsilon
+        if self.scale_sigma_by_number and mask is not None:
+            N = mask.sum(1).reshape(-1, 1)
+            z_sigma = z_sigma / torch.sqrt(N+self.epsilon)
 
         if self.variational:
             z_sample = self.sample(z_mean, z_sigma)
@@ -102,14 +179,20 @@ class VariationalComponent(nn.Module):
 
         return {"z_mean": z_mean, "z_sigma": z_sigma, "z_var": torch.square(z_sigma), "z_sample": z_sample}
     
-    def kl_divergence(self, z_mean, z_var):
+    def kl_divergence_(self, z_mean, z_var):
+        if self.variational:
+            return -0.5 * (1 + torch.log(z_var) - torch.square(z_mean) - z_var)
+        return 0
+    
+    def kl_divergence(self, z_mean, z_var, weight=None):
 
         if self.variational:
-            return -0.5 * torch.mean(1 + torch.log(z_var) - torch.square(z_mean) - z_var)
+            if weight is None:
+                return -0.5 * torch.mean(1 + torch.log(z_var) - torch.square(z_mean) - z_var)
+            else:
+                return -0.5 * torch.mean(torch.mean(1 + torch.log(z_var) - torch.square(z_mean) - z_var, dim=1) * weight)
         else:
             return 0.0
-
-
 
 class BinaryGELU(nn.Module):
 
@@ -430,6 +513,113 @@ class HyperMLPBlock(nn.Module):
             x = x + bias # (B, O, 1)
         x = self.activation(x.squeeze(-1)) #(B, O)
         return x
+    
+@register_module
+class Partial:
+
+    def __init__(self, model_class, **kwargs):
+
+        self.model_class = model_class
+        self.kwargs = kwargs
+
+    def __call__(self, *args, **kwargs):
+        matches = set(kwargs.keys()) & set(self.kwargs.keys())
+        if len(matches):
+            import sys
+            print(f"WARNING: Partial wrapper for {self.model_class.__name__} detected duplicate instances of the following kwargs:\n  ", matches, "\nWill override the following:", file=sys.stderr)
+            for key in matches:
+                print(f"  {key}: {self.kwargs[key]} -> {kwargs[key]}", file=sys.stderr)
+        model_kwargs = self.kwargs.copy()
+        model_kwargs.update(kwargs)
+        return self.model_class(*args, **model_kwargs)
+
+@register_module
+class MultiHeadLinearBlock(nn.Module):
+
+    def __init__(self, in_features, out_features=None, bias=True, n_heads=1):
+        super().__init__()
+
+        self.in_features = in_features
+        self.n_heads = n_heads
+        self.out_features = in_features if out_features is None else out_features
+        assert in_features / n_heads == in_features//n_heads, f"n_features ({in_features}) must be divisible by n_heads ({n_heads})"
+        assert self.out_features / n_heads == self.out_features//n_heads, f"n_output ({out_features}) must be divisible by n_heads ({n_heads})"
+
+        # n_networks = n_heads
+        # in_channels -> n_features
+        # groups -> n_networks
+
+        self.multihead_linear = nn.Conv1d(self.in_features, self.out_features, groups=self.n_heads, kernel_size=1, bias=bias)
+
+    def forward(self, x):
+        # Assume x is of shape (* x n_features)
+
+        x_shape = x.shape
+        x = x.reshape(x.shape[0], -1, self.in_features).transpose(-2, -1).contiguous() # (* x n_features x 1)
+        return self.multihead_linear(x).transpose(-2, -1).reshape(*x_shape[:-1], self.out_features).contiguous() # (* x n_output)
+
+        x_shape = x.shape
+        x = x.reshape(-1, self.in_features, 1) # (* x n_features x 1)
+        return self.multihead_linear(x).reshape(*x_shape[:-1], self.out_features) # (* x n_output)
+
+@register_module
+class FastMultiHeadLinearBlock(nn.Module):
+
+    def __init__(self, in_features, out_features=None, bias=True, n_heads=1):
+        super().__init__()
+
+        self.in_features = in_features
+        self.n_heads = n_heads
+        self.out_features = in_features if out_features is None else out_features
+        assert in_features / n_heads == in_features//n_heads, f"n_features ({in_features}) must be divisible by n_heads ({n_heads})"
+        assert self.out_features / n_heads == self.out_features//n_heads, f"n_output ({out_features}) must be divisible by n_heads ({n_heads})"
+
+        # n_networks = n_heads
+        # in_channels -> n_features
+        # groups -> n_networks
+
+        k = int(math.sqrt(in_features))
+        self.features_per_head = in_features // n_heads
+
+        self.weight = nn.Parameter(torch.rand(1, n_heads, out_features//n_heads, self.features_per_head, requires_grad=True) * 2*k - k)
+        if bias:
+            self.bias = nn.Parameter(torch.rand(out_features, requires_grad=True) * 2*k - k)
+        else:
+            self.bias = None
+
+    def forward(self, x):
+        # Assume x is of shape (* x n_features)
+
+        shape = x.shape
+        if self.bias is not None:
+            return torch.matmul(self.weight, x.view(*shape[:-1], self.n_heads, self.features_per_head, 1)).view(*shape[:-1], self.out_features) + self.bias
+        else:
+            return torch.matmul(self.weight, x.view(*shape[:-1], self.n_heads, self.features_per_head, 1)).view(*shape[:-1], self.out_features)
+
+
+
+@register_module
+class MultiHeadLayerNorm(nn.Module):
+
+    def __init__(self, n_features, n_heads=1):
+        super().__init__()
+
+        self.n_features = n_features
+        self.n_heads = n_heads
+        assert n_features / n_heads == n_features//n_heads, f"n_features ({n_features}) must be divisible by n_heads ({n_heads})"
+
+        # n_networks = n_heads
+        # in_channels -> n_features
+        # groups -> n_networks
+        self.heads = nn.ModuleList([nn.LayerNorm(self.n_features//self.n_heads) for _ in range(self.n_heads)])
+
+
+    def forward(self, x):
+        # Assume x is of shape (* x n_features)
+
+        x_shape = x.shape
+        x = x.reshape(x.shape[0], -1, self.n_heads, self.n_features//self.n_heads) # (* x n_features x 1)
+        return torch.cat([head(x_i) for x_i, head in zip(x.unbind(-2), self.heads)], dim=-1).reshape(*x_shape)
 
 @register_module
 class SlidingBasisSuppression(nn.Module):
@@ -452,7 +642,186 @@ class SlidingBasisSuppression(nn.Module):
     def forward(self):
 
         return self.activation((self.num_basis)*(self.scaler(self.controller) - 1) + self.slider + 1)
+    
+@register_module
+class ResidualBlock(nn.Sequential):
 
+    def forward(self, x):
+        
+        return super().forward(x) + x
+
+@register_module
+class DropoutBlock(nn.Sequential):
+    # Dropouts typically come before linear layers except for the output layer: https://www.cs.toronto.edu/~hinton/absps/JMLRdropout.pdf
+
+    def __init__(self, *layers, dropout=0.0):
+
+        super().__init__(*layers)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        return super().forward(self.dropout(x))
+
+@register_module
+class GatedLinearLayer(nn.Module):
+
+    def __init__(self, in_features, out_features, bias=True, dim=-1, n_heads=1):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        Linear = nn.Linear if n_heads == 1 else Partial(MultiHeadLinearBlock, n_heads=n_heads)
+
+        self.layer = nn.Sequential(Linear(in_features, out_features*2, bias=bias), nn.GLU(dim=dim))
+
+    def forward(self, x):
+
+        return self.layer(x)
+
+@register_module
+class FeedFowardLayer(nn.Module):
+    # Note: Normalization Layers typically come before activation functions, typically after a linear layer https://arxiv.org/abs/1603.05027
+
+    __constants__ = ["in_features", "out_features", "bias", "n_heads"]
+
+    in_features: int
+    out_features: int
+    n_heads: int
+    bias: bool
+
+
+    def __init__(self, in_features, out_features, bias=True, n_heads=1, activation="ReLU", pre_activation=False, dropout=0.0, norm=None, residual=False):
+
+        super().__init__()
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.n_heads = n_heads
+        self.bias = bias
+
+        activation_function = getattr(nn, activation)
+
+        if n_heads == 1:
+            linear_layer = nn.Linear(in_features, out_features, bias=bias)
+        else:
+            linear_layer = MultiHeadLinearBlock(in_features, out_features, bias=bias, n_heads=n_heads)
+        
+        if norm:
+            activation_block = nn.Sequential(nn.LayerNorm({True: in_features, False: out_features}[pre_activation]), activation_function())
+        else:
+            activation_block = activation_function()
+
+        layer = [linear_layer, activation_block]
+        if pre_activation: layer = layer[::-1]
+
+        self.layer = nn.Sequential(*layer)
+        if dropout:
+            self.layer = DropoutBlock(self.layer, dropout=dropout)
+
+        if residual:
+            if in_features != out_features:
+                raise ValueError(f"For residual connections, in_features ({in_features}) must equal out_features ({out_features})")
+            self.layer = ResidualBlock(self.layer)
+
+    def forward(self, x):
+
+        return self.layer(x)
+
+@register_module
+class MultiLayerPerceptron(nn.Module):
+
+    def __init__(self, in_features, out_features, hidden_size, n_layers, bias=True, n_heads=1, activation="ReLU", pre_activation=False, dropout=0.0, norm=None, residual=False, skip=False):
+
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.n_heads = n_heads
+        self.bias = bias
+        self.hidden_size = hidden_size
+        self.n_layers = n_layers
+
+        layer_constructor = Partial(FeedFowardLayer, bias=bias, n_heads=n_head, activation=activation, pre_activation=pre_activation, dropout=dropout, norm=norm)
+        input_layer = layer_constructor(in_features, hidden_size, residual=False)
+        hidden_layers = nn.Sequential([layer_constructor(hidden_size, hidden_size, residual=residual and not skip) for _ in range(n_layers-1)])
+        if skip:
+            if not residual:
+                raise ValueError("MultiLayerPerceptron got skip=True but residual=False")
+            hidden_layers = ResidualBlock(hidden_layers)
+        if pre_activation:
+            output_layer = layer_constructor(hidden_size, out_features, residual=False)
+        else:
+            output_layer = nn.Linear(hidden_size, out_features, bias=bias) if n_heads == 1 else MultiHeadLinearBlock(hidden_size, out_features, bias=bias, n_heads=n_heads)
+        self.neural_network = nn.Sequential(input_layer, hidden_layers, output_layer)
+
+    def forward(self, x):
+
+        return self.neural_network(x)
+
+
+@register_module
+class ResidualNetwork(nn.Module):    
+
+    def __init__(
+        self,
+        n_features,
+        n_output,
+        n_layers=2,
+        n_hidden=200,
+        activation="Softplus",
+        dropout=0.5,
+        norm=False,
+        bias=True,
+        n_heads=1,
+        norm_first=True,
+        residual_input=False,
+    ):
+        
+        super().__init__()
+
+        self.ninp = n_features
+        self.noutp = n_output
+        self.nlayers = n_layers
+        self.nhid = n_hidden
+        self.bias = bias
+        self.n_heads = n_heads
+
+        linear_block = nn.Linear if n_heads == 1 else Partial(MultiHeadLinearBlock, n_heads=n_heads)
+        LayerNorm = nn.LayerNorm if n_heads == 1 else Partial(MultiHeadLayerNorm, n_heads=n_heads)
+        self.activation_function = getattr(nn, activation)
+
+        # Generate Input Layers
+        input_layer = [linear_block(self.ninp, self.nhid, bias=bias)]
+        if norm and norm_first: input_layer.append(LayerNorm(self.nhid)) # pre-norm layer
+        input_layer.extend([self.activation_function(), nn.Dropout(p=dropout)]) # Activation function and dropout
+        if norm and not norm_first: input_layer.append(LayerNorm(self.nhid)) # add and norm behavior, break identity relation
+        input_layer = nn.Sequential(*input_layer) # create an mlp block then add a residual connection
+
+        # Generate Hidden Layers
+        hidden_layers = []
+        for _ in range(self.nlayers-1):
+            hidden_layer = [linear_block(self.nhid, self.nhid, bias=bias)]
+            if norm and norm_first: hidden_layer.append(LayerNorm(self.nhid)) # pre-norm layer
+            hidden_layer.extend([self.activation_function(), nn.Dropout(p=dropout)]) # Activation function and dropout
+            hidden_layers.append(ResidualBlock(*hidden_layer)) # create an mlp block then add a residual connection
+            if norm and not norm_first: hidden_layers.append(LayerNorm(self.nhid)) # add and norm behavior, break identity relation
+            
+        hidden_layers = nn.Sequential(*hidden_layers)
+
+        # Generate Output Layer
+        output_layer = linear_block(self.nhid, self.noutp, bias=bias)
+
+        self.neural_network = nn.Sequential(input_layer, hidden_layers, output_layer)
+        if residual_input:
+            assert self.ninp == self.noutp
+            self.neural_network = ResidualBlock(self.neural_network)
+
+    def forward(self, x):
+
+        return self.neural_network(x)
+
+
+
+@register_module
 class ResNet(nn.Module):
 
     def __init__(

@@ -21,7 +21,7 @@ class MaskedGaussianNLL(nn.Module):
         self.weight_classes = weight_classes
         self.inverse_transform = inverse_transform
 
-    def forward(self, out, batch):
+    def forward(self, out, batch, *args):
 
         recon = out["reconstructed"]
         target = batch["flux_full"]
@@ -73,7 +73,7 @@ class MaskedMSELoss(nn.Module):
         self.weight_classes = weight_classes
         self.inverse_transform = inverse_transform
 
-    def forward(self, out, batch):
+    def forward(self, out, batch, *args):
 
         recon = out["reconstructed"]
         target = batch["flux_full"]
@@ -102,6 +102,53 @@ class MaskedMSELoss(nn.Module):
         loss = (pad_mask * loss).sum(1) / (pad_mask.sum(1) + self.eps)
 
         return loss
+    
+@register_module
+class FlexibleGaussianLoss:
+
+    def __init__(self, 
+                 eps: float = 1e-6, 
+                 ):
+        super().__init__()
+        self.loss = nn.GaussianNLLLoss(full=True, reduction='none', eps=eps)
+        self.eps = eps
+
+    def __call__(self, input, target, sigma, *args):
+
+        var = torch.square(sigma)
+        return self.loss(input, target, var)
+
+@register_module
+class FlexibleHuberLoss(nn.Module):
+
+    def __init__(self, 
+                 eps: float = 1e-6, 
+                 delta: float = 1.0, 
+                 ):
+        super().__init__()
+        self.eps = eps
+        self.delta = delta
+
+    def forward(self, input, target, sigma, delta_scaler=None):
+
+        delta = self.delta
+
+        if delta_scaler is not None:
+            delta_scale = delta_scaler.unsqueeze(-1) > 0
+            delta = delta * delta_scale
+            delta = delta.clamp_min(self.delta / 2)
+            total_values = len(delta_scale.ravel())
+            delta_weight = total_values / (delta_scale.sum() + 1) / 2 * delta_scale
+            delta_weight += total_values / ((~delta_scale).sum() + 1) / 2 * ~delta_scale
+
+        a = torch.abs((input - target) / sigma.clamp_min(self.eps))
+        
+        huber_mask = a < delta
+        loss = delta * (a - 0.5 * delta)
+        loss[huber_mask] = 0.5 * a[huber_mask].square()
+        loss = loss * delta_weight
+
+        return loss
 
 @register_module
 class MaskedHuberLoss(nn.Module):
@@ -114,7 +161,8 @@ class MaskedHuberLoss(nn.Module):
                  inverse_transform=True,
                  alpha: float = 0.9,
                  scale_delta_by = None,
-                 scale_recon = True,):
+                 scale_recon = True,
+                 tune_parameters = False):
         super().__init__()
         self.eps = eps
         self.delta = delta
@@ -122,6 +170,7 @@ class MaskedHuberLoss(nn.Module):
         self.weight_classes = weight_classes
         self.inverse_transform = inverse_transform
         self.scale_recon = scale_recon
+        self.tune_parameters = tune_parameters
 
         self.weighting_func = nn.Softmax(dim=1)
         self.weighting_func_out = nn.Softmin(dim=1)
@@ -205,6 +254,28 @@ class MaskedHuberLoss(nn.Module):
             loss = loss * band_weight[:, :, None]
         if self.scale_delta_by is not None:
             loss = loss * delta_weight # weight the loss by fraction of points
+
+        if self.tune_parameters:
+            parameters = out['parameters']
+            if 'mu' in parameters:
+                mu = parameters['mu'] # (B, T, E, K) or (B, T, E, N, K)
+            else:
+                mu = parameters['offset']
+
+            if 'weights' in parameters:
+                weights = parameters['weights']
+            else:
+                weights = parameters['amplitude']
+            b, t, e, k = mu.shape
+            mu_mean = mu.mean(dim=-1, keepdim=True) # center in basis-space
+            mu_diff = (mu - mu_mean)
+            #mu_loss = (mu_diff**2).mean(3).mean(2)[:, :, None]
+            weight_loss = torch.abs(weights)
+            param_loss = torch.mean(weight_loss * mu_diff**2, dim=(-1, -2))[:, :, None]
+            #import sys
+            #print(mu.shape, pad_mask.shape, file=sys.stderr)
+            #mu_loss = (mu**2).mean((2,3))[:, :, None]
+            loss += param_loss * 1e-2
 
         #assert (loss >= 0).all(), f"{delta.min(), delta.max(), delta_weight.min(), delta_weight.max(), scaling.min(), scaling.max(), loss.min(), loss.max()}"
 

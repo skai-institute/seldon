@@ -1,21 +1,25 @@
-from TAE.models.decoders import Label_MLPDecoder, ConvDecoder, MLPBandDecoder
+import TAE.models.decoders
 
 
-from TAE.models.encoders import Label_MLPEncoder, MLPEncoder, ConvEncoder, GRUMaskedEncoder
+import TAE.models.encoders
 from TAE.models.deepset import DeepSetEncoder
-from TAE.models.optimizer import Adam, RAdam, Ranger
+from TAE.models.optimizer import Adam
 from TAE.models.scheduler import (
     AnnealingLinearScheduler,
     ConstantScheduler,
     ConstrainedExponentialSchedulerMaLagrange,
+    SquareRootWarmupScheduler
 )
 from TAE.models.vae_label import VAELabel
 from TAE.models.autoencoders import Autoencoder, BandAwareAutoencoder, StudentGRUMasked
 from TAE.util import registry
-from TAE.models.ModelNN import ResNet
+from TAE.models.ModelNN import *
 from TAE.models.neuralode import RNNODEEncoder
 from TAE.models.loss import *
 from TAE.models.embeddings import *
+from TAE.models.seldon import *
+from TAE.energy import *
+from TAE.finetuning import LoRATuner
 
 # from TAE.experiments.autoencoder_experiment import Experiment, AutoencoderExperiment
 
@@ -25,23 +29,13 @@ NAME_KEY: str = "name"
 CONFIG_KEY: str = "config"
 
 MODULES = {
-    "MLPEncoder": MLPEncoder,
     "MLPBandDecoder": MLPBandDecoder,
     "AnnealingLinearScheduler": AnnealingLinearScheduler,
     "ConstrainedExponentialSchedulerMaLagrange": ConstrainedExponentialSchedulerMaLagrange,
-    "RAdam": RAdam,
-    "Ranger": Ranger,
     "Adam": Adam,
-    "Label_MLPEncoder": Label_MLPEncoder,
-    "Label_MLPDecoder": Label_MLPDecoder,
     "ConstantScheduler": ConstantScheduler,
-    "ConvDecoder": ConvDecoder,
-    "ConvEncoder": ConvEncoder,
-    "VAELabel": VAELabel,
     "Autoencoder": Autoencoder,
     "BandAwareAutoencoder": BandAwareAutoencoder,
-    "GRUMaskedEncoder": GRUMaskedEncoder,
-    "student_gru_masked": StudentGRUMasked,
     # "Experiment": Experiment,
     # "AutoencoderExperiment": AutoencoderExperiment,
 }
@@ -56,6 +50,8 @@ def get_module(name: str, config) -> object:
         )
 
     cls = MODULES[name]
+    if config is None:
+        return cls
     for key, value in config.items():
         if isinstance(value, dict) and NAME_KEY in value and CONFIG_KEY in value:
             config[key] = get_module(value[NAME_KEY], value[CONFIG_KEY])

@@ -6,11 +6,15 @@ from TAE.util import registry
 
 # from TAE.experiments.autoencoder_experiment import AutoencoderExperiment
 from TAE.experiments.autoencoder_experiment import GRUVAEExperiment
+from TAE.experiments.seldon_experiment import SELDONExperiment
+from TAE.experiments.seldon_energy_experiment import *
+from TAE.experiments.seldon_energy_experiment_classification import *
 
 MODULES = {
     # "Experiment": Experiment,
     # "AutoencoderExperiment": AutoencoderExperiment,
     "GRUVAEExperiment": GRUVAEExperiment,
+    "SELDONExperiment": SELDONExperiment,
 }
 MODULES.update(registry)
 

@@ -2,9 +2,35 @@ from typing import List, Optional
 
 import numpy as np
 from torch import optim
+from TAE.util import register_module
 
 # CLIP_LAM_MAX = 1e8
 CLIP_LAM_MAX = 1e4
+
+@register_module
+class SquareRootWarmupScheduler:
+
+    def __init__(self, num_warmups: int = 4000):
+
+        self.num_warmups = num_warmups
+
+    def __call__(self, optimizer):
+
+        return optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: min(1/(np.sqrt(epoch)+1e-6), (epoch) * self.num_warmups**(-1.5)))
+
+
+@register_module
+class CosineAnnealingScheduler:
+
+    def __init__(self, T_max: int = 400000, eta_min: float = 0.0):
+
+        self.T_max = T_max
+        self.eta_min = eta_min
+
+    def __call__(self, optimizer):
+
+        return optim.lr_scheduler.CosineAnnealingLR(optimizer, self.T_max, eta_min=self.eta_min, last_epoch=-1)
+
 
 
 class AnnealingLinearScheduler:

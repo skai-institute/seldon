@@ -1,0 +1,48 @@
+dataset:
+  name: SNDataModule
+  config:
+    lightcurve_path: TAE/data/cleaned_data_merged.pkl
+    class_filter: ['SNIa']
+    flux_normalization: max_partial_scalar
+    time_normalization: minmax
+    min_points: 10
+    augmentation: mixed
+    min_obs_fraction: 0.8
+    num_aug_per_curve: 4
+    batch_size: 2048
+    num_workers: 4
+    test_run: false
+    t_max: infer
+
+model_params:
+  name: student_gru_masked
+  config:
+    teacher_ckpt: /scratch/jiezhong/kd_ckpts/teacher_full.ckpt
+    lambda_kd: 2.0
+    latent_dim: 64
+    variational: false
+    kl_weight: 0.001
+    loss: Huber
+    encoder:
+      name: GRUMaskedEncoder
+      config: {input_dim: 3, hidden_dim: 128}
+    decoder:
+      name: SigmoidBasisDecoder
+      config:
+        latent_dim: 64
+        hidden: 256
+        BAND_EMB_DIM: 0
+        num_basis: 8
+        dropout: 0.20          # <── activates new dropout layer
+
+trainer_params:
+  max_epochs: 600
+  accelerator: auto
+  devices: 1
+  gradient_clip_val: 1.0
+  log_every_n_steps: 10
+
+logging_params:
+  manual_seed: 42
+  save_dir: /scratch/jiezhong/logs/
+  name: StudentKD_GRUmask

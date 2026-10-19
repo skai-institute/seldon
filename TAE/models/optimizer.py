@@ -1,11 +1,14 @@
 import typing
 
-import torch_optimizer as torch_optim
+#import torch_optimizer as torch_optim
 from torch import optim
+from TAE.models.scheduler import SquareRootWarmupScheduler
+from TAE.util import register_module
+
 
 # from models.scheduler import CosineWarmupScheduler
 
-
+'''
 class RAdam:
     def __init__(
         self,
@@ -62,7 +65,7 @@ class Ranger:
         )
         return optimizer
 
-
+'''
 # class Adam_WU:
 #     def __init__(
 #         self,
@@ -83,50 +86,58 @@ class Ranger:
 #         )
 #         return (optimizer,)
 
+@register_module
+class NAdam:
+    def __init__(
+        self,
+        LR,
+        weight_decay=0,
+        scheduler=None,
+        **kwargs,
+    ):
+        self.lr = LR
+        self.weight_decay = weight_decay
+        self.scheduler = scheduler
 
+    def __call__(self, model):
+
+        optims = optim.NAdam(
+            model.parameters(),
+            lr=self.lr,
+            weight_decay=self.weight_decay,
+        )
+
+        if self.scheduler is not None:
+            scheduler = self.scheduler(optims)
+            return [optims], [{"scheduler": scheduler, "interval": "step"}]
+        
+        return optims
+
+@register_module
 class Adam:
     def __init__(
         self,
         LR,
         weight_decay=0,
-        encoder_scale_factor=1,
-        reduce_on_plateau=False,
+        scheduler=None,
+        **kwargs,
     ):
         self.lr = LR
         self.weight_decay = weight_decay
-        self.encoder_scale_factor = encoder_scale_factor
-        self.reduce_on_plateau = reduce_on_plateau
+        self.scheduler = scheduler
 
     def __call__(self, model):
-        optims = []
-        if self.encoder_scale_factor == 1:
-            optims = optim.Adam(
-                model.parameters(),
-                lr=self.lr,
-                weight_decay=self.weight_decay,
-            )
-        elif self.encoder_scale_factor != 1:
-            encoder_parameters = [p for p in model.encoder.parameters()]
-            encoder_parameter_ids = [id(p) for p in encoder_parameters]
-            decoder_non_decoupled_params = [p for p in model.decoder.to_params.decoder.decoder.parameters()]
-            decoder_non_decoupled_param_ids = [id(p) for p in model.decoder.to_params.decoder.decoder.parameters()]
-            other_parameters = [p for p in model.parameters() if id(p) not in encoder_parameter_ids and id(p) not in decoder_non_decoupled_param_ids]
-            
-            optims = optim.Adam(
-                [
-                    {"params":other_parameters, "lr":self.lr},
-                    {"params":encoder_parameters, "lr":self.lr*self.encoder_scale_factor, 'weight_decay':self.weight_decay},
-                    {"params":decoder_non_decoupled_params, 'weight_decay':self.weight_decay}
-                ],
-                weight_decay=0.0,#,self.weight_decay,
-                lr=self.lr
-            )
 
+        optims = optim.Adam(
+            model.parameters(),
+            lr=self.lr,
+            weight_decay=self.weight_decay,
+        )
+
+        if self.scheduler is not None:
+            scheduler = self.scheduler(optims)
+            return [optims], [{"scheduler": scheduler, "interval": "step"}]
         
-        if self.reduce_on_plateau:
-            #scheduler = optim.lr_scheduler.ExponentialLR(optims, gamma=0.98)
-            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optims, cooldown=2, factor=0.2)
-            return [optims], [{"scheduler": scheduler, "interval": "epoch", "monitor": "val_loss"}]
         return optims
 
         #scheduler = optim.lr_scheduler.ReduceLROnPlateau(optims, cooldown=5, factor=0.5)
