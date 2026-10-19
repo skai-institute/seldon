@@ -436,3 +436,92 @@ def test_private_objects_do_not_reach_public_checkout(
         capture_output=True,
     )
     assert probe.returncode != 0
+
+
+# --- Review follow-ups: scan coverage, restored deletions, CLI ------------
+
+# One leak-shaped string per scan pattern, each built from parts.
+PATTERN_FIXTURES = {
+    "private clone URL": "git" + "@github.com:" + "example/repo.git",
+    "ssh clone URL": "git" + "+ssh://" + "example.org/repo",
+    "private repo URL": "https://" + "github.com/" + "skai-institute/" + "seldon-dsb",
+    "SSH key fingerprint": FAKE_FINGERPRINT,
+    "ssh directory path": "~/." + "ssh/" + "config",
+}
+
+
+def test_every_scan_pattern_has_a_fixture() -> None:
+    assert {name for name, _ in sync.SCAN_PATTERNS} == set(PATTERN_FIXTURES)
+
+
+@pytest.mark.parametrize("name", sorted(PATTERN_FIXTURES))
+def test_each_scan_pattern_is_caught(public: Path, name: str) -> None:
+    commit(public, "Leaky note", {"notes.md": PATTERN_FIXTURES[name] + "\n"})
+    hits = sync.scan_branch(public, "upstream/main", "base")
+    assert name in {hit.pattern for hit in hits}
+
+
+def test_private_repo_url_match_ignores_case(public: Path) -> None:
+    lowered = (
+        "https://" + "github.com/" + "skai-institute/" + "transient-foundation-model"
+    )
+    commit(public, "Lowercase link", {"notes.md": lowered + "\n"})
+    hits = sync.scan_branch(public, "upstream/main", "base")
+    assert [hit.pattern for hit in hits] == ["private repo URL"]
+
+
+def test_leak_only_in_path_name_is_caught(private: Path, public: Path) -> None:
+    commit(private, "Add config", {"pkg/." + "ssh/" + "config": "clean\n"})
+    git(private, "update-ref", "refs/remotes/origin/main", "HEAD")
+    with pytest.raises(sync.SyncStop, match="in path pkg/"):
+        run(private, public)
+
+
+def test_leak_only_in_author_header_is_caught(private: Path, public: Path) -> None:
+    (private / "pkg" / "core.py").write_text("x = 7\n")
+    git(private, "add", "pkg/core.py")
+    git(
+        private,
+        "commit",
+        "-q",
+        "-m",
+        "Clean message",
+        f"--author=Leaky <{FAKE_PRIVATE_CLONE}>",
+    )
+    git(private, "update-ref", "refs/remotes/origin/main", "HEAD")
+    with pytest.raises(sync.SyncStop, match="commit headers"):
+        run(private, public)
+
+
+def test_imported_file_deleted_on_public_main_is_reported(
+    private: Path, public: Path
+) -> None:
+    first = run(private, public)
+    merge_sync_branch(public, first.branch)
+    git(public, "switch", "-q", "main")
+    commit(public, "Remove core", {"pkg/core.py": None}, "1700000050 +0000")
+    git(public, "update-ref", "refs/remotes/upstream/main", "main")
+    git(public, "switch", "-q", "-c", "base2")
+    commit(private, "More", {"pkg/extra.py": "y = 1\n"}, "1700000051 +0000")
+    git(private, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+    second = run(private, public, branch="sync-2", base="base2")
+    assert "pkg/core.py" in second.edited_paths
+    assert git(public, "show", f"{second.branch}:pkg/core.py") == "x = 2"
+
+
+def _cli(*args: str) -> int:
+    from tools.tfm_sync.__main__ import main
+
+    return main(list(args))
+
+
+def test_cli_exit_codes(private: Path, public: Path, tmp_path: Path) -> None:
+    common = ["--source", str(private), "--public", str(public), "--base", "base"]
+    assert _cli("sync", *common, "--branch", "sync-ok") == 0
+    assert _cli("scan", "--public", str(public), "--branch", "sync-ok") == 0
+    commit(public, "Leak", {"README.md": FAKE_FINGERPRINT + "\n"})
+    assert _cli("scan", "--public", str(public), "--branch", "base") == 2
+    assert _cli("sync", *common, "--branch", "sync-leak") == 2
+    missing = ["--source", str(tmp_path / "nope"), "--public", str(public)]
+    assert _cli("sync", *missing, "--base", "base", "--branch", "x") == 2

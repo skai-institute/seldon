@@ -55,7 +55,8 @@ SCAN_PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     (
         "private repo URL",
         re.compile(
-            rb"github\.com[:/]skai-institute/(?:Transient-Foundation-Model|seldon-dsb)"
+            rb"github\.com[:/]skai-institute/(?:Transient-Foundation-Model|seldon-dsb)",
+            re.IGNORECASE,
         ),
     ),
     ("SSH key fingerprint", re.compile(rb"SHA256:[A-Za-z0-9+/]{43}")),
@@ -146,8 +147,8 @@ class SyncResult:
         written: Rewritten commits created by this run.
         dropped: TFM commits the filter dropped in this run.
         readme_diff: TFM ``README.md`` diff since the last synced tip.
-        edited_paths: Imported paths public main edited since the last sync;
-            the TFM version overwrites them.
+        edited_paths: Imported paths public main edited or deleted since the
+            last sync; the TFM version overwrites or restores them.
         deleted_paths: Base-branch paths that are neither public-owned nor in
             the new TFM tree; the sync merge deletes them.
     """
@@ -317,7 +318,15 @@ def _commit_meta(git: Git, sha: str) -> tuple[dict[str, str], bytes]:
         Environment variables for ``commit-tree`` and the exact message bytes.
     """
     fmt = "%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%cd"
-    fields = git.run("log", "-1", f"--format={fmt}", "--date=raw", sha).decode()
+    fields = git.run(
+        "-c",
+        "log.showSignature=false",
+        "log",
+        "-1",
+        f"--format={fmt}",
+        "--date=raw",
+        sha,
+    ).decode()
     an, ae, ad, cn, ce, cd = fields.rstrip("\n").split("\0")
     env = {
         "GIT_AUTHOR_NAME": an,
@@ -398,10 +407,12 @@ def rewrite_history(
 
 
 def scan(git: Git, base: str, head: str) -> list[ScanHit]:
-    """Scan every object and message that ``head`` adds on top of ``base``.
+    """Scan everything that ``head`` adds on top of ``base``.
 
     Blobs are scanned byte-for-byte, so binary files and content introduced
-    only by merge commits are covered.
+    only by merge commits are covered. Every path name and the complete raw
+    commit objects (author and committer headers as well as messages) are
+    scanned too.
 
     Args:
         git: Repository holding both revisions.
@@ -417,6 +428,11 @@ def scan(git: Git, base: str, head: str) -> list[ScanHit]:
     for line in listing.splitlines():
         sha, _, path = line.partition(" ")
         paths.setdefault(sha, path)
+        hits.extend(
+            ScanHit(name, sha, f"path {path}")
+            for name, pattern in SCAN_PATTERNS
+            if pattern.search(path.encode())
+        )
     if paths:
         batch = git.run(
             "cat-file", "--batch", input_bytes="\n".join(paths).encode() + b"\n"
@@ -430,7 +446,7 @@ def scan(git: Git, base: str, head: str) -> list[ScanHit]:
             if obj_type == "blob":
                 haystack, where = body, paths[sha]
             elif obj_type == "commit":
-                haystack, where = _commit_message(body), "commit message"
+                haystack, where = body, "commit headers or message"
             else:
                 continue
             hits.extend(
@@ -597,10 +613,8 @@ def _sync_in_scratch(scratch: Git, public_git: Git, branch: str) -> SyncResult:
         previous_entries = scratch.tree_entries(previous_public)
         edited = sorted(
             p
-            for p, entry in base_entries.items()
-            if not is_public_owned(p)
-            and p in previous_entries
-            and previous_entries[p] != entry
+            for p, entry in previous_entries.items()
+            if not is_public_owned(p) and p in merged and base_entries.get(p) != entry
         )
 
     tree = scratch.write_tree(merged)

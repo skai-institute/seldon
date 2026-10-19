@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,7 +27,7 @@ def _print_report(result: sync.SyncResult) -> None:
         print(f"branch: {result.branch}")
     for label, paths in (
         (
-            "imported paths edited on public main (TFM version wins)",
+            "imported paths edited or deleted on public main (TFM version wins)",
             result.edited_paths,
         ),
         ("paths the sync merge deletes", result.deleted_paths),
@@ -45,7 +46,8 @@ def main(argv: list[str] | None = None) -> int:
         argv: Arguments without the program name; defaults to ``sys.argv``.
 
     Returns:
-        Process exit code: 0 on success or nothing to sync, 2 when stopped.
+        Process exit code: 0 on success or nothing to sync, 2 when a guard,
+        the scan, or a git command stopped the run.
     """
     parser = argparse.ArgumentParser(prog="python -m tools.tfm_sync")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -66,6 +68,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
+    try:
+        return _run(args)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or b"").decode(errors="replace").strip()
+        logger.error("git failed: %s\n%s", " ".join(map(str, exc.cmd)), stderr)
+        return EXIT_STOPPED
+
+
+def _run(args: argparse.Namespace) -> int:
+    """Run the parsed subcommand.
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        Process exit code.
+    """
     if args.command == "scan":
         hits = sync.scan_branch(args.public, args.public_ref, args.branch)
         for hit in hits:

@@ -16,7 +16,8 @@ What the tool guarantees:
   the public side. On every other path, TFM wins.
 - Rewriting happens in a throwaway repository, so filtered-out private objects
   never enter your public checkout.
-- Before the sync branch is created, every object and commit message it adds is
+- Before the sync branch is created, everything it adds (file contents, path
+  names, and complete commit objects including author and committer headers) is
   scanned for private clone URLs, private repository URLs, SSH key fingerprints
   and SSH directory paths. Any hit stops the run.
 
@@ -58,9 +59,9 @@ From the public repository root:
 3. Read the report:
 
    - **commits written / dropped**: how many TFM commits were imported.
-   - **imported paths edited on public main**: someone changed an imported file
-     directly on public main; the TFM version overwrites it. Move the change into
-     TFM if it should survive.
+   - **imported paths edited or deleted on public main**: someone changed or
+     deleted an imported file directly on public main; the TFM version overwrites
+     or restores it. Move the change into TFM if it should survive.
    - **paths the sync merge deletes**: files on public main that are neither
      public-owned nor in TFM. Move them into TFM, or add them to the
      public-owned list in `sync.py`, before pushing.
@@ -94,21 +95,25 @@ From the public repository root:
 
 Stops and what to do:
 
-- **Leak scan hit**: the message names the pattern, file and object. Fix the
-  source of the string (in TFM or on the base branch) and rerun. Never push.
+- **Leak scan hit**: the message names the pattern, where it was found and the
+  object. Never push. If the hit is on the base branch, fix it there and rerun.
+  If it is in TFM content, fix it in TFM and rerun; but when the string sits in
+  an *old* TFM commit at an allowed path, rerunning hits it again because TFM
+  history is fixed. In that case keep the path out of public history by adding
+  it to `NEVER_IMPORTED` in `sync.py` (reviewed in the same PR), or stop and
+  ask the TFM maintainers.
 - **TFM main was force-pushed**: the recorded TFM tip is no longer in TFM's
   history. Published commits cannot change; ask the TFM maintainers to restore
-  the old history, or rebuild the state by hand (below).
+  the old history (push the old tip back to TFM main) and rerun.
 - **Previous sync PR was merged by squash or rebase**: the last synced commit is
-  not in public main's history. Rebuild the state by hand (below).
+  not in public main's history. See the recovery steps below.
 - **Branch already exists**: pick a new `--branch` name.
 
-### Rebuilding the state by hand
+### Recovering from a squash or rebase merge
 
-If a sync PR was squash-merged, public main contains the right files but not the
-rewritten commits the state file points at. Restore consistency by reverting the
-squash commit on public main, then rerunning the sync so the same rewritten
-commits arrive through a merge commit. If reverting is not acceptable, edit
-`state.json` so that `source_tip` and its `commit_map` entry point at the
-squashed commit; the next sync then continues from there, with the squashed
-range collapsed into one public commit.
+If a sync PR was squash- or rebase-merged, public main contains the right files
+but not the rewritten commits the state file points at. The supported recovery
+is to revert that squash commit on public main (through a normal PR), then rerun
+the sync so the same rewritten commits arrive through a merge commit. Do not
+edit `state.json` by hand: its commit map must point only at commits that public
+main actually contains, or later syncs fail.
