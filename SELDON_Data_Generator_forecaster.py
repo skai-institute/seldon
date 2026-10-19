@@ -1,6 +1,7 @@
 import os
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = "expandable_segments:True"
-import pytorch_lightning as pl
+os.environ['TORCH_COMPILE_DISABLE'] = "1"
+import lightning.pytorch as pl
 import torch.backends.cudnn as cudnn
 from omegaconf import OmegaConf
 from TAE.datasets.dataset_factory import get_module as get_dataset
@@ -10,6 +11,7 @@ from TAE.util import fill_config
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
+import torch.nn.functional as F
 from TAE.visualizations.reconstruction import plot_reconstruction_from_batch
 from TAE.datasets.lightcurve_dataset import enhanced_collate_fn
 import torch
@@ -26,6 +28,8 @@ from tqdm import tqdm
 from TAE.datasets.utils import datamodule_counts, to_cuda
 from functools import partial
 import pandas as pd
+from TAE.datasets.lightcurve_preprocessor import LightCurvePreprocessor
+from torch.utils.data import TensorDataset, DataLoader, Dataset, random_split
 torch.set_float32_matmul_precision('high')
 
 
@@ -125,7 +129,7 @@ def batch_stream(batch, experiment, N_times=200): # Do this for 1 of N_samples, 
 
         ones_array = torch.ones((length)).to(int)
 
-        encoder_inputs = {'x_input': x_input, 'band_idx': band_idx, 'in_sample_mask': in_sample_mask}
+        encoder_inputs = {'x_input': x_input, 'band_idx': band_idx, 'in_sample_mask': in_sample_mask, 'pad_mask_part': in_sample_mask}
         decoder_inputs = {'times': times, 'bands': bands}
         meta_data = {'redshift': redshift*ones_array, 'snid':snid*ones_array.to(int), 'N_obs': progressive_mask.sum(1), 'length': length*ones_array.to(int), 'raw_idx': raw_idx*ones_array.to(int), 'class_id':class_id*ones_array.to(int)}
 
@@ -167,21 +171,68 @@ def evaluate_batch_collection(collection, experiment):
         )
         latent = model.variational_component(memory)
         z = latent['z_mean']
+        z_dec = model.encode(encoder_inputs['x_input'].to(device),
+                               encoder_inputs['band_idx'].to(device),
+                               mask=encoder_inputs['in_sample_mask'].to(device),
+        )   
 
         out = model.decode(
-            z, 
+            z_dec, 
             decoder_inputs['times'].to(device), 
             decoder_inputs['bands'].to(device)
         ).to("cpu")
         out_recon = model.decode(
-            z, 
+            z_dec, 
             encoder_inputs['x_input'][..., 0][..., None].to(device), 
             encoder_inputs['band_idx'].to(device)
         ).to("cpu")
         #import pdb; pdb.set_trace()
+        out_interp = out
         latent = {key:value.to("cpu") for key, value in latent.items()}
         out = out.reshape(N_samples, N_times, 6, -1).unbind(2)
         out = dict(zip(map(BAND_IDX_MAP.get, range(6)), out))
+
+
+        outputs = {"latent": latent, "interpolation": out, "reconstruction":out_recon}#, "parameters":parameters}
+
+
+        if hasattr(model, 'uq_net') and model.uq_net is not None:
+            #import pdb; pdb.set_trace()
+            error_recon = model.uq_net(
+                torch.cat(
+                    [
+                        out_recon.to(device), 
+                        model.decoder.band_emb(
+                            encoder_inputs['band_idx'][:, :, 0].to(device)
+                        ), 
+                        z_dec[:, None, :].expand(-1, out_recon.shape[1], -1),
+                        encoder_inputs['x_input'][..., 0][..., None].to(device),
+                    ], 
+                    dim=-1
+                )
+            )
+            outputs['error'] = F.softplus(error_recon).to("cpu")
+
+            error = model.uq_net(
+                torch.cat(
+                    [
+                        out_interp.to(device), 
+                        model.decoder.band_emb(
+                            decoder_inputs['bands'][:, :, 0].to(device)
+                        ), 
+                        z_dec[:, None, :].expand(-1, out_interp.shape[1], -1),
+                        decoder_inputs['times'].to(device),
+                    ], 
+                    dim=-1
+                )
+            )
+            #import pdb; pdb.set_trace()
+            interpolation_error = F.softplus(error).to("cpu")
+            interpolation_error = interpolation_error.reshape(N_samples, N_times, 6, -1).unbind(2)
+            interpolation_error = dict(zip([f'{i}_sigma' for i in map(BAND_IDX_MAP.get, range(6))], interpolation_error))
+            outputs['interpolation'].update(interpolation_error)
+
+
         
         #parameters = {
         #    "Basis":model.decoder.last_basis,
@@ -192,7 +243,6 @@ def evaluate_batch_collection(collection, experiment):
         #    "band_embedding": model.decoder.last_band_embedding
         #} # this is a large amount of data
 
-        outputs = {"latent": latent, "interpolation": out, "reconstruction":out_recon}#, "parameters":parameters}
         outputs = {'outputs':flatten_dict(outputs)}
         outputs.update(collection)
         outputs = flatten_dict(outputs)
@@ -255,6 +305,9 @@ def generate_dataframes(outputs):
         seq_index = torch.arange(length_small[0])[None, :].expand(len(reconstructions), -1)
         reconstruction_snid = outputs['meta_data.snid'][snid_mask][None,:].expand(*seq_index.shape).to(int)
         reconstruction_n_obs = outputs['meta_data.N_obs'][snid_mask][:, None].expand(*seq_index.shape).to(int)
+        if (reconstruction_snid.reshape(-1).shape != seq_index.reshape(-1).shape or reconstruction_n_obs.reshape(-1).shape != reconstructions.reshape(-1).shape):
+
+            import pdb; pdb.set_trace()
         reconstruction_dataframe = pd.DataFrame(
             {
                 'snid': reconstruction_snid.reshape(-1),
@@ -263,6 +316,8 @@ def generate_dataframes(outputs):
                 'reconstruction': reconstructions.reshape(-1)
             },
         ).set_index(['snid','N_obs','sequence_index'])
+        if 'outputs.error' in outputs:
+            reconstruction_dataframe['reconstruction_error'] = outputs['outputs.error'][snid_mask, :length_small[0], 0].reshape(-1)
     
         latent_keys = [key for key in outputs if 'latent' in key]
         latent_variables = {key.split('.')[-1]+f'_{i}': z[snid_mask] for key in latent_keys for i, z in enumerate(outputs[key].unbind(-1))}
@@ -293,6 +348,7 @@ def generate_dataframes(outputs):
         input_data_frames['reconstruction'].append(reconstruction_dataframe)
         input_data_frames['latent'].append(latent_dataframe)
         input_data_frames['interpolation'].append(interpolation_dataframe)
+
     
     input_data_frames['meta_data'] = pd.concat(input_data_frames['meta_data'])
     input_data_frames['input_data'] = pd.concat(input_data_frames['input_data'])
@@ -310,6 +366,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     _ = parser.add_argument('--config', type=str, nargs="+", required=True, default=config_path_str)
+    _ = parser.add_argument('--data', type=str, required=False, default='')
     args = parser.parse_args()
 
     N_samples = 1
@@ -327,11 +384,13 @@ if __name__ == "__main__":
     data_cfg['dataset']['config']['num_workers'] = 1
     data_cfg['dataset']['config']['augmentations'] = ['FullSample']
     data_cfg['dataset']['config']['batch_size'] = 512
+    data_cfg['dataset']['config']['max_points'] = data_cfg['dataset']['config']['max_length']
 
     data_cfg = fill_config(data_cfg)
     data_config = OmegaConf.to_container(data_cfg)
 
     data = get_dataset(data_config["dataset"]["name"], data_config["dataset"]["config"])
+
     #data.setup()
 
     count_info = datamodule_counts(data)
@@ -345,6 +404,7 @@ if __name__ == "__main__":
         cfg['dataset']['config']['num_workers'] = 1
         data_cfg['dataset']['config']['augmentations'] = ['FullSample']
         data_cfg['dataset']['config']['batch_size'] = 512
+        data_cfg['dataset']['config']['max_points'] = data_cfg['dataset']['config']['max_length']
 
         cfg = fill_config(cfg)
         config = OmegaConf.to_container(cfg)
@@ -365,31 +425,82 @@ if __name__ == "__main__":
 
         # for over models
         weights_file = list(config_path.glob('checkpoints/epoch*'))[0]
-        experiment.load_from_checkpoint(checkpoint_path=weights_file,
-                                        model=model,
-                                        data=data,
-                                        params=cfg["exp_params"]["config"]["params"]);
+        #experiment.load_from_checkpoint(checkpoint_path=weights_file)
+        try:
+            experiment.load_from_checkpoint(checkpoint_path=weights_file,
+                                            model=model,
+                                            data=data,
+                                            weights_only=None,
+                                            params=cfg["exp_params"]["config"]["params"], strict=True);
+        except Exception as e:
+            print(e) # Force Manual Loading Because it is stupid
+            experiment = get_experiment(
+                cfg["exp_params"]["name"],
+                {"model": model, "data": data, **config["exp_params"]["config"]},
+            )
+            #experiment.model.energy_model = experiment.energy_model
+            #experiment.model.energy_model = experiment.energy_model
+            device = 'cuda'
+            weights = torch.load(weights_file, map_location=torch.device(device))['state_dict']
+            #experiment.load_state_dict(weights)
+            for name, parameter in experiment.named_parameters():
+                if 'energy_model' in name:
+                    print(name)
+                parameter.data = weights[name]
 
         _ = experiment.cuda()
         _ = experiment.eval()
         model.eval()
+        flux_stats = data.flux_stats
+        
+        if args.data != '': # switch to a different dataset but keep the same stats
+            data = experiment.data
+            print(f"Exctracting data from {args.data}")
+            data.lightcurve_path = args.data
+            data.class_filter = None
+            data.load_data()
+            data.init_light_curves()
+            data.init_band_index()
+            data.init_meta_data()
+            data.init_class_weights()
+            data.dataset = LightCurvePreprocessor(        
+                light_curves = data.full_light_curve_array,
+                class_names = data.full_class_names,
+                class_weights = data.class_weights,
+                band_indices = data.band_array,
+                band_weights = data.band_weights,
+                flux_stats = flux_stats,
+                min_points=data.min_points,
+                max_points=data.max_points,
+                meta_data=data.meta_data,
+                **data.kwargs
+            )
+            data.dataset.force_zero_non_detections = True
+            data.dataset.resample = False
+            data.test_data = data.dataset
+            data.flux_stats = flux_stats
+        else:
+            args.data = data_cfg['dataset']['config']['lightcurve_path'][0]
+        print(args.data)
 
         data_loader = experiment.data.test_dataloader()
         class_names = sorted(list(set(experiment.data.dataset.class_names)))
-        class_map = dict(zip(class_names, range(len(class_names))))
+        class_map = dict(zip(class_names, range(1, len(class_names)+1)))
         class_map.update(experiment.data.flux_stats)
         print(class_map)
-        with open(config_path / 'class_map.txt', 'w') as f:
+        with open(config_path / f'class_map_{Path(args.data).stem}.txt', 'w') as f:
             f.write(str(class_map))
         with open(config_path/"flux_stats.txt", 'w') as f:
             f.write(str(experiment.data.flux_stats))
-
+        
         batch_data = []
         device = experiment.device
+        if N_samples == 1:
+            experiment.data.dataset.resample = False
 
         for k in tqdm(range(N_samples)):
             all_outputs = {}
-            batch_stem = f"{cfg['logging_params']['name']}_{k}"
+            batch_stem = f"{cfg['logging_params']['name']}_{Path(args.data).stem}_{k}"
             for i, batch in tqdm(enumerate(data_loader), total=len(data_loader), desc=f'Processing {config_path.name}', leave=False):
                 all_outputs[str(i)] = {}
                 for j, collection in enumerate(batch_stream_limited(batch, experiment, N_times=N_times, max_length=2048)):

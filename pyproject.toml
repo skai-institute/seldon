@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "seldon_core"
+version = "1.2.0"
+description = "SELDON transient foundation model library (TAE), installable under the seldon_core distribution name for downstream consumers such as seldon-dsb."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "SkAI Institute" }]
+
+# Pure-pip dependencies only. The pytorch / lightning / CUDA stack is
+# intentionally NOT declared here -- it is a conda-env precondition
+# (CUDA-tagged builds with no clean PyPI equivalent; see
+# TAE/environment.yaml). Consumers pre-install that stack via conda,
+# then `pip install` this package (two-step install).
+dependencies = [
+    "hydra-core",
+    "omegaconf",
+    "pandas",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "seaborn",
+    "scikit-learn",
+    "pyarrow",
+    "h5py",
+    "tqdm",
+    "tensorboard",
+    "torchode",
+    "torchdiffeq",
+    "umap-learn",
+    "safetensors",
+    "torch-optimizer",
+]
+
+[tool.hatch.build.targets.wheel]
+# Ships the historical TAE package plus the thin seldon_core alias
+# package, so `import TAE` (in-repo convention) and `import seldon_core`
+# (downstream convention) both work and resolve to the same modules.
+packages = ["TAE", "seldon_core"]

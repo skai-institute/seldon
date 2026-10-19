@@ -3,7 +3,224 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from TAE.util import register_module
+from TAE.util import register_module, read_transmission_filter, map_transmission_filters
+from TAE.datasets.utils import BAND_IDX_MAP
+from TAE.models.basis import FourierActivation
+from scipy.interpolate import interp1d
+import sys
+
+register_module(nn.Embedding)
+
+UNIT_TABLE_SI = {
+    'microns': 1e-6,
+    'angstroms': 1e-10,
+    'cm':1e-2,
+    None: 1,
+    }
+
+@register_module
+def LearnableBandEmbedding(bandpass, **kwargs):
+    '''Learnable Band Embedding from a TAE.datasets.bandpass.BandPass object'''
+
+    return nn.Embedding(bandpass.num_bands, **kwargs)
+
+@register_module
+class BandPassEmbedding(nn.Module):
+    '''Static Band Embedding from a TAE.datasets.bandpass.BandPass object'''
+
+    UNIT_SCALE = {
+        'microns': 1.0,
+        'angstroms': 1e4,
+        'cm': 1e-4,
+        }
+
+    def __init__(self, bandpass, lambda_min=None, lambda_max=None, lambda_unit='microns', logscale=False, embedding_dim=512, max_norm=False):
+
+        super().__init__()
+
+        self.bandpass = bandpass
+        self.emb_dim = bandpass.num_bands
+        self.logscale = logscale
+
+        self.lambda_min = lambda_min
+        self.lambda_max = lambda_max
+
+        self.embedding_dim = embedding_dim
+
+        self.lambda_unit = lambda_unit
+        self.lambda_scale = UNIT_TABLE_SI[self.lambda_unit] / UNIT_TABLE_SI[self.bandpass.unit]
+
+        self.max_norm = max_norm
+
+        self._register_embedding()
+
+    def _interpolate(self):
+
+        wave_min = self.lambda_min / self.lambda_scale if self.lambda_min is not None else None
+        wave_max = self.lambda_max / self.lambda_scale if self.lambda_max is not None else None
+        n_points = self.embedding_dim
+
+        all_waves = np.hstack([value[0] for value in self.bandpass.index_to_filter.values()])
+        if wave_min is None:
+            wave_min = all_waves.min()
+        if wave_max is None:
+            wave_max = all_waves.max()
+        if n_points is None:
+            n_points = len(np.unique(all_waves))
+
+        wave_grid = np.logspace(np.log10(wave_min), np.log10(wave_max), n_points)
+        interpolators = {key: interp1d(*value, fill_value=0.0, bounds_error=False) for key, value in self.bandpass.index_to_filter.items()}
+        filter_embeddings = {key: value(wave_grid) for key, value in interpolators.items()}
+
+        return wave_grid, filter_embeddings
+
+    def _register_embedding(self):
+
+        lambda_grid, filters = self._interpolate()
+
+        throughput = np.vstack(list(filters.values())).astype(np.float32)
+        if self.max_norm:
+            throughput = throughput / throughput.max(axis=1, keepdims=True)
+        if self.logscale:
+            throughput = torch.log(torch.tensor(throughput, requires_grad=False)).clamp_min(-44.0)
+        else:
+            throughput = torch.tensor(throughput, requires_grad=False)
+        self.emb = nn.Embedding.from_pretrained(throughput, freeze=True)
+        lambda_grid = torch.tensor(lambda_grid[None, None, :].astype(np.float32), requires_grad=False) * self.lambda_scale
+        self.num_bands = len(filters)
+        self.register_buffer("lambda_grid", lambda_grid)
+
+    def forward(self, band_idx):
+
+        return self.emb(band_idx)
+
+
+@register_module
+class AttentiveBandPassEmbedding(BandPassEmbedding):
+
+    def __init__(self, bandpass, lambda_min=None, lambda_max=None, lambda_unit='microns', logscale=False, embedding_dim=512, output_dim=256, activation='GELU', max_norm=False, **mht_kwargs):
+
+        super().__init__(bandpass, lambda_min=lambda_min, lambda_max=lambda_max, lambda_unit=lambda_unit, logscale=logscale, embedding_dim=embedding_dim, max_norm=max_norm)
+        assert bandpass.index_to_filter is not None, "AttentiveBandPassEmbedding currently only works with static transmission functions"
+        if 'embed_dim' not in mht_kwargs:
+            mht_kwargs.update({'embed_dim':output_dim})
+        if 'num_heads' not in mht_kwargs:
+            mht_kwargs.update({'num_heads': 1})
+        mht_kwargs.update({'batch_first': True})
+
+        activation = getattr(nn, activation)
+
+        self.wave_embedding = nn.Sequential(nn.Linear(1, mht_kwargs['embed_dim']//2), FourierActivation(), nn.Linear(mht_kwargs['embed_dim'], mht_kwargs['embed_dim']))
+        self.transmission_embedding = nn.Sequential(nn.Linear(1, mht_kwargs['embed_dim']), activation(), nn.Linear(mht_kwargs['embed_dim'], mht_kwargs['embed_dim']))
+        self.layer_norm_transmission = nn.LayerNorm(mht_kwargs['embed_dim'])
+
+        self.query = nn.Parameter(torch.randn((1, 1, mht_kwargs['embed_dim']), requires_grad=True))
+        self.attention = nn.MultiheadAttention(**mht_kwargs)
+
+        self.layer_norm_ff = nn.LayerNorm(mht_kwargs['embed_dim'])
+        self.feed_forward = nn.Sequential(nn.Linear(mht_kwargs['embed_dim'], mht_kwargs['embed_dim']), activation(), nn.Linear(mht_kwargs['embed_dim'], mht_kwargs['embed_dim']), nn.LayerNorm(mht_kwargs['embed_dim']))
+        self.output_projection = nn.Linear(mht_kwargs['embed_dim'], output_dim)
+        
+
+    def forward(self, band_idx):
+        '''
+             Query             Wavelength          Transmission
+               |                   |                    |
+               |                   V                    V
+               |               Pos Encoding            MLP
+               |                   |                    |
+               |                   L------->(+)<--------⅃
+               |                             |
+               |                             V
+               |                         LayerNorm
+               |                             |
+               |                             V
+               |                         Key, Value
+               |                             |
+               L------>Cross Attention<------⅃
+               |               |
+               |               V
+               |           Layer Norm
+               |               |
+               L----->(+)<-----⅃
+               |       |
+               |       V
+               |  Feed Forward
+               |       |
+               |       V
+               |   Layer Norm
+               |       |
+               L->(+)<-⅃
+                   |
+                   V
+               Projection   
+        '''
+
+        B, S, *_ = band_idx.shape
+        lambda_grid = self.lambda_grid.reshape(1, self.emb.embedding_dim, 1) # 1, 1, E -> 1, E, 1
+
+        # This is a little trick that saves memory if we have fewer filter functions than we have data points.  Perform the op on all embeddings
+        # Then select the ones we want at the end from the band index input
+        sparse_transmission = self.transmission_embedding(self.emb(torch.arange(self.emb.num_embeddings, device=band_idx.device))[:, :, None]) # (N, E, emb_dim)
+        transmission_emb = self.layer_norm_transmission(self.wave_embedding(lambda_grid) + sparse_transmission)  # N, E, embed_dim
+
+        query = self.query.expand(transmission_emb.shape[0], 1, -1) # N, 1, embed_dim 
+
+        pooled, _ = self.attention(query, transmission_emb, transmission_emb, need_weights=False) # N, 1, embed_dim
+        feed_forward_input = self.layer_norm_ff(pooled) + query # N, 1, embed_dim
+        output_embedding = self.output_projection(self.feed_forward(feed_forward_input) + query).squeeze(1)[band_idx.reshape(-1)].reshape(B, S, -1) # B, S, output_dim
+
+        return output_embedding
+
+
+@register_module
+class TransmissionFilterEmbedding(nn.Module):
+
+    UNIT_SCALE = {
+        'microns': 1.0,
+        'angstroms': 1e4,
+        'cm': 1e-4,
+        }
+
+    def __init__(self, filelist, emb_dim=6, lambda_min=None, lambda_max=None, lambda_unit='microns', logscale=False):
+
+        super().__init__()
+        self.filelist = filelist # List of transmission filter files
+        self.emb_dim = emb_dim
+        self.logscale = logscale
+
+        self.lambda_min = lambda_min
+        self.lambda_max = lambda_max
+
+        self.lamba_unit = lambda_unit
+        self.lambda_scale = self.UNIT_SCALE[self.lambda_unit]
+
+        self.load_filters()
+
+    def __len__(self):
+
+        return self.num_bands
+
+
+    def load_filters(self):
+
+        wave_min = self.lambda_min / self.lambda_scale if self.lambda_min is not None else None
+        wave_max = self.lambda_max / self.lambda_scale if self.lambda_max is not None else None
+        lambda_grid, filters = map_transmission_filters(self.filelist, n_points=self.emb_dim, wave_min=wave_min, wave_max=wave_max)
+        band_idx = [BAND_IDX_MAP[key] for key in filters]
+        throughput = np.vstack(list(filters.values())).astype(np.float32)
+        if self.logscale:
+            throughput = torch.log(torch.tensor(throughput[np.argsort(band_idx)], requires_grad=False)).clamp_min(-44.0)
+        self.emb = nn.Embedding.from_pretrained(throughput, freeze=True)
+        lambda_grid = torch.tensor(lambda_grid[None, None, :].astype(np.float32), requires_grad=False) * self.lambda_scale
+        self.num_bands = len(filters)
+        self.register_buffer("lambda_grid", lambda_grid)
+
+    def forward(self, band_idx):
+
+        return self.emb(band_idx)
+
+
 
 class LinearTimeEmbedding(nn.Module):
     # https://arxiv.org/html/2409.20092v1
@@ -167,7 +384,7 @@ class PositionalEncoding(nn.Module):
         )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
+        pe = pe.unsqueeze(0)
         self.register_buffer("pe", pe)
 
     def forward(self, x):
@@ -181,10 +398,10 @@ class PositionalEncoding(nn.Module):
             >>> output = pos_encoder(x)
         """
 
-        x = x + self.pe[: x.size(0), :]
+        x = x + self.pe[:, x.size(1), :]
         return self.dropout(x)
 
-
+@register_module
 class FPEmbedding(nn.Module):
 
     def __init__(self, nvector, nemb, dropout=0.2, normalize=False):

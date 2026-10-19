@@ -1,0 +1,9 @@
+flow_prior:
+  name: "NVP"
+  config:
+    flow_depth: 5
+    n_layers: 3
+    hidden_dims: 256
+    activation: "Softsign"
+    latent_dim: 2
+    residual_connection: True

@@ -2,7 +2,7 @@ import pickle
 import numpy as np
 import torch
 from collections import defaultdict
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 from torch.utils.data import TensorDataset, DataLoader, Dataset, random_split
 from pathlib import Path
 from tqdm import tqdm

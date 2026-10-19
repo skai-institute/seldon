@@ -1,0 +1,7 @@
+topo_sig:
+  name: CkNN
+  config:
+    nb_neighbors: 11
+    delta_obs: 0.9
+    delta_latent: 0.9
+    loss_scale: num_pairs

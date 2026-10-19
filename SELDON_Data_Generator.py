@@ -1,4 +1,4 @@
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import torch.backends.cudnn as cudnn
 from omegaconf import OmegaConf
 from TAE.datasets.dataset_factory import get_module as get_dataset

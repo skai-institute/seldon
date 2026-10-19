@@ -2,7 +2,7 @@ import pickle
 import numpy as np
 import torch
 from collections import defaultdict
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 from torch.utils.data import TensorDataset, DataLoader, Dataset, random_split
 from pathlib import Path
 from tqdm import tqdm
@@ -74,7 +74,7 @@ class LightCurvePreprocessor(Dataset):
 
         
         self.full_light_curve_array = [
-            df[columns].astype(np.float32).reset_index(drop=True).values
+            df[columns].astype(np.float32).reset_index(drop=True).to_numpy(copy=True)
             for df in tqdm(self.full_light_curves, desc="Extracting LCs")
         ]
 
@@ -493,12 +493,12 @@ def enhanced_collate_fn(batch):
     max_part = max(len(b["x_input"]) for b in batch)
     max_full = max(len(b["time_full"]) for b in batch)
 
-    for i in range(len(batch)): # NOTE: A Forward Fill MUST Happen on Masked Points
-        b = batch[i]
-        b['x_input'] = b['x_input_full'].clone()
-        b['x_input'][~b['pad_mask'][:, 0]] = b['x_input'][b['pad_mask'][:, 0]][-1] # Forward fill
-        #locs = torch.where(~b['in_sample_mask'][:, 0])[0]
-        #b['x_input'][locs] = b['x_input'][locs-1]
+    #for i in range(len(batch)): # NOTE: A Forward Fill MUST Happen on Masked Points
+    #    b = batch[i]
+    #    b['x_input'] = b['x_input_full'].clone()
+    #    b['x_input'][~b['pad_mask_part'][:, 0]] = b['x_input'][b['pad_mask_part'][:, 0]][-1] # Forward fill
+    #    #locs = torch.where(~b['in_sample_mask'][:, 0])[0]
+    #    #b['x_input'][locs] = b['x_input'][locs-1]
     x_input = torch.stack([b["x_input"] for b in batch])
     time = x_input[:, :, 0] # (B, S)
     mask = torch.stack(
@@ -519,6 +519,7 @@ def enhanced_collate_fn(batch):
         "in_sample_mask": torch.stack(
             [b["in_sample_mask"] for b in batch]
         ).squeeze(2),
+        "pad_mask_part": torch.stack([b["pad_mask_part"] for b in batch]).squeeze(2),
         "pad_mask_full": torch.stack([b["pad_mask"] for b in batch]).squeeze(2),
         "lengths": torch.tensor([b["length"] for b in batch]),
         "flux_norm_info": [b["flux_norm_info"] for b in batch],
@@ -533,6 +534,9 @@ def enhanced_collate_fn(batch):
     if batch[0]['meta_data'] is not None:
         coll.update(
             {'detection_flag': torch.stack([b["meta_data"][:, 0] for b in batch])})
+        if batch[0]['redshift'] is not None:
+            coll.update(
+                {'redshift': torch.tensor([b["redshift"][0, 0] for b in batch])})
     return coll
 
 

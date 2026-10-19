@@ -1,0 +1,20 @@
+encoder:
+  name: 'Label_MLPEncoder'
+  config:
+    observation_dim: 1100
+    hidden_dim: 256
+    hidden_layers: 2
+    label_dim: 4
+    is_residual_on: False
+    dropout: 0.05
+
+decoder:
+  name: "Label_MLPDecoder"
+  config:
+    latent_dim: 6
+    output_dim: 1100
+    hidden_layers: 2
+    hidden_dim: 256
+    label_dim: 4
+    is_residual_on: False
+    dropout: 0.05

@@ -1,0 +1,6 @@
+topo_sig:
+  name: "SNE"
+  config:
+    kernel_type: "student"
+    width_data: 1.0
+    width_latent: 1.0
