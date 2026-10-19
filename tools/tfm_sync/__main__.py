@@ -52,15 +52,15 @@ def main(argv: list[str] | None = None) -> int:
 
     run = sub.add_parser("sync", help="rewrite new TFM commits onto a sync branch")
     run.add_argument("--source", type=Path, required=True, help="TFM checkout")
-    run.add_argument("--source-ref", default="origin/main")
+    run.add_argument("--source-ref", default=sync.DEFAULT_SOURCE_REF)
     run.add_argument("--public", type=Path, default=Path.cwd(), help="this checkout")
-    run.add_argument("--public-ref", default="upstream/main")
+    run.add_argument("--public-ref", default=sync.DEFAULT_PUBLIC_REF)
     run.add_argument("--base", required=True, help="branch to merge onto")
     run.add_argument("--branch", required=True, help="sync branch to create")
 
     check = sub.add_parser("scan", help="scan a branch before pushing it")
     check.add_argument("--public", type=Path, default=Path.cwd())
-    check.add_argument("--public-ref", default="upstream/main")
+    check.add_argument("--public-ref", default=sync.DEFAULT_PUBLIC_REF)
     check.add_argument("--branch", required=True)
 
     args = parser.parse_args(argv)

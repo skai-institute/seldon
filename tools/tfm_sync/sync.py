@@ -23,7 +23,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -62,6 +61,9 @@ SCAN_PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     ("SSH key fingerprint", re.compile(rb"SHA256:[A-Za-z0-9+/]{43}")),
     ("ssh directory path", re.compile(rb"\." + rb"ssh/")),
 )
+
+DEFAULT_SOURCE_REF = "origin/main"
+DEFAULT_PUBLIC_REF = "upstream/main"
 
 _SCRATCH_PUBLIC = "refs/sync/public"
 _SCRATCH_BASE = "refs/sync/base"
@@ -208,9 +210,16 @@ class Git:
             )
         return result.stdout
 
-    def text(self, *args: str, **kwargs: object) -> str:
-        """Run a git command and return stripped text stdout."""
-        return self.run(*args, **kwargs).decode().strip()  # type: ignore[arg-type]
+    def text(
+        self,
+        *args: str,
+        input_bytes: bytes | None = None,
+        env: dict[str, str] | None = None,
+        check: bool = True,
+    ) -> str:
+        """Run a git command and return stripped text stdout; see ``run``."""
+        out = self.run(*args, input_bytes=input_bytes, env=env, check=check)
+        return out.decode().strip()
 
     def ok(self, *args: str) -> bool:
         """Return whether a git command exits zero."""
@@ -280,7 +289,7 @@ def is_public_owned(path: str) -> bool:
 
 
 def compute_allowlist(tip_paths: set[str], previous: list[str]) -> set[str]:
-    """Compute the paths allowed into rewritten commits (R2).
+    """Compute the paths allowed into rewritten commits.
 
     Args:
         tip_paths: Paths present at the current TFM tip.
@@ -290,6 +299,11 @@ def compute_allowlist(tip_paths: set[str], previous: list[str]) -> set[str]:
         Tip paths plus previously allowed paths, minus never-imported paths.
     """
     return (tip_paths | set(previous)) - NEVER_IMPORTED
+
+
+def _commit_message(raw: bytes) -> bytes:
+    """Return the exact message bytes of a raw commit object."""
+    return raw.split(b"\n\n", 1)[1] if b"\n\n" in raw else b""
 
 
 def _commit_meta(git: Git, sha: str) -> tuple[dict[str, str], bytes]:
@@ -313,9 +327,7 @@ def _commit_meta(git: Git, sha: str) -> tuple[dict[str, str], bytes]:
         "GIT_COMMITTER_EMAIL": ce,
         "GIT_COMMITTER_DATE": cd,
     }
-    raw = git.run("cat-file", "commit", sha)
-    message = raw.split(b"\n\n", 1)[1] if b"\n\n" in raw else b""
-    return env, message
+    return env, _commit_message(git.run("cat-file", "commit", sha))
 
 
 def rewrite_history(
@@ -325,7 +337,7 @@ def rewrite_history(
 
     Commits are walked oldest first. Each tree is filtered to ``allowlist``,
     parents are mapped through the commit map, and a commit whose filtered
-    tree equals its single remaining parent's tree is dropped (KTD7).
+    tree equals its single remaining parent's tree is dropped.
 
     Args:
         git: Scratch repository holding both histories.
@@ -367,11 +379,13 @@ def rewrite_history(
         }
         tree = git.write_tree(entries)
         if len(mapped) <= 1:
-            parent_tree = (
-                git.text("rev-parse", f"{mapped[0]}^{{tree}}") if mapped else None
-            )
-            if (mapped and tree == parent_tree) or (not mapped and not entries):
-                commit_map[sha] = mapped[0] if mapped else None
+            parent = mapped[0] if mapped else None
+            if parent:
+                drop = tree == git.text("rev-parse", f"{parent}^{{tree}}")
+            else:
+                drop = not entries
+            if drop:
+                commit_map[sha] = parent
                 dropped += 1
                 continue
         env, message = _commit_meta(git, sha)
@@ -414,14 +428,16 @@ def scan(git: Git, base: str, head: str) -> list[ScanHit]:
             body = batch[header_end + 1 : header_end + 1 + int(size)]
             pos = header_end + 1 + int(size) + 1
             if obj_type == "blob":
-                for name, pattern in SCAN_PATTERNS:
-                    if pattern.search(body):
-                        hits.append(ScanHit(name, sha, paths[sha]))
+                haystack, where = body, paths[sha]
             elif obj_type == "commit":
-                message = body.split(b"\n\n", 1)[1] if b"\n\n" in body else b""
-                for name, pattern in SCAN_PATTERNS:
-                    if pattern.search(message):
-                        hits.append(ScanHit(name, sha, "commit message"))
+                haystack, where = _commit_message(body), "commit message"
+            else:
+                continue
+            hits.extend(
+                ScanHit(name, sha, where)
+                for name, pattern in SCAN_PATTERNS
+                if pattern.search(haystack)
+            )
     return hits
 
 
@@ -474,8 +490,8 @@ def run_sync(
     public: Path,
     base: str,
     branch: str,
-    source_ref: str = "origin/main",
-    public_ref: str = "upstream/main",
+    source_ref: str = DEFAULT_SOURCE_REF,
+    public_ref: str = DEFAULT_PUBLIC_REF,
 ) -> SyncResult:
     """Run one sync and, on success, create ``branch`` in the public checkout.
 
@@ -500,9 +516,10 @@ def run_sync(
     public_full = _full_ref(public_git, public_ref)
     base_full = _full_ref(public_git, base)
 
-    scratch_dir = Path(tempfile.mkdtemp(prefix="tfm-sync-"))
-    try:
-        scratch = Git(scratch_dir, bare=True)
+    with tempfile.TemporaryDirectory(
+        prefix="tfm-sync-", ignore_cleanup_errors=True
+    ) as scratch_dir:
+        scratch = Git(Path(scratch_dir), bare=True)
         scratch.run("init", "--bare", "-q")
         scratch.run(
             "fetch",
@@ -515,18 +532,15 @@ def run_sync(
         scratch.run(
             "fetch", "-q", "--no-tags", str(source), f"{source_full}:{_SCRATCH_SOURCE}"
         )
-        return _sync_in_scratch(scratch, public_git, public, branch)
-    finally:
-        shutil.rmtree(scratch_dir, ignore_errors=True)
+        return _sync_in_scratch(scratch, public_git, branch)
 
 
-def _sync_in_scratch(
-    scratch: Git, public_git: Git, public: Path, branch: str
-) -> SyncResult:
+def _sync_in_scratch(scratch: Git, public_git: Git, branch: str) -> SyncResult:
     """Rewrite, merge, scan and fetch back; see ``run_sync``."""
     state = _read_state(scratch, _SCRATCH_PUBLIC)
     new_tip = scratch.text("rev-parse", _SCRATCH_SOURCE)
     previous_public: str | None = None
+    readme_diff = ""
     if state.source_tip:
         if not scratch.is_ancestor(state.source_tip, _SCRATCH_SOURCE):
             raise SyncStop(
@@ -541,9 +555,6 @@ def _sync_in_scratch(
                 "the last synced commit is not in public main's history; "
                 "the previous sync PR was merged by squash or rebase"
             )
-
-    readme_diff = ""
-    if state.source_tip:
         readme_diff = scratch.text("diff", state.source_tip, new_tip, "--", "README.md")
 
     if new_tip == state.source_tip:
