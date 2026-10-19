@@ -525,3 +525,22 @@ def test_cli_exit_codes(private: Path, public: Path, tmp_path: Path) -> None:
     assert _cli("sync", *common, "--branch", "sync-leak") == 2
     missing = ["--source", str(tmp_path / "nope"), "--public", str(public)]
     assert _cli("sync", *missing, "--base", "base", "--branch", "x") == 2
+
+
+def test_planning_docs_are_never_imported(private: Path, public: Path) -> None:
+    commit(
+        private,
+        "Add planning docs",
+        {
+            "docs/plans/2026-01-01-plan.md": "plan\n",
+            "docs/brainstorms/2026-01-01-requirements.md": "ideas\n",
+            "docs/guide.md": "kept\n",
+        },
+    )
+    git(private, "update-ref", "refs/remotes/origin/main", "HEAD")
+    result = run(private, public)
+    touched = paths_ever_touched(public, f"upstream/main..{result.branch}")
+    assert not any(p.startswith(("docs/plans/", "docs/brainstorms/")) for p in touched)
+    assert "docs/guide.md" in touched
+    state = json.loads(git(public, "show", f"{result.branch}:{sync.STATE_PATH}"))
+    assert not any(p.startswith("docs/plans/") for p in state["allowlist"])

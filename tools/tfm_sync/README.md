@@ -7,7 +7,8 @@ the history rewritten so that only allowed paths are ever published.
 What the tool guarantees:
 
 - Only paths present at TFM's tip (plus paths already published) appear in
-  imported commits. TFM's `README.md` is never imported.
+  imported commits. TFM's `README.md`, `docs/plans/` and `docs/brainstorms/`
+  are never imported (see `NEVER_IMPORTED` in `sync.py`).
 - Authors, committers, dates and messages are unchanged.
 - Commits already public are never rewritten; the state file
   `tools/tfm_sync/state.json` maps each TFM commit to its public commit.

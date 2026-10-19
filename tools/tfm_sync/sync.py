@@ -44,9 +44,14 @@ PUBLIC_OWNED = (
     "tests/test_tfm_sync.py",
 )
 
-# Paths never imported from TFM history, at any sync. TFM's old README
-# versions contain private access details.
-NEVER_IMPORTED = frozenset({"README.md"})
+# Paths never imported from TFM history, at any sync; entries ending in "/"
+# are directory prefixes. TFM's old README versions contain private access
+# details, and its planning documents stay private at the lead's request.
+NEVER_IMPORTED = (
+    "README.md",
+    "docs/brainstorms/",
+    "docs/plans/",
+)
 
 # Leak patterns. Each literal is split so this file never matches itself.
 SCAN_PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
@@ -274,6 +279,14 @@ class Git:
             return self.text("write-tree", env=env)
 
 
+def _matches(path: str, entries: tuple[str, ...]) -> bool:
+    """Return whether ``path`` equals an entry or lies under a ``/`` prefix."""
+    return any(
+        path.startswith(entry) if entry.endswith("/") else path == entry
+        for entry in entries
+    )
+
+
 def is_public_owned(path: str) -> bool:
     """Return whether the public side owns ``path``.
 
@@ -283,10 +296,7 @@ def is_public_owned(path: str) -> bool:
     Returns:
         True when the path comes from the public base branch, never from TFM.
     """
-    return any(
-        path.startswith(owned) if owned.endswith("/") else path == owned
-        for owned in PUBLIC_OWNED
-    )
+    return _matches(path, PUBLIC_OWNED)
 
 
 def compute_allowlist(tip_paths: set[str], previous: list[str]) -> set[str]:
@@ -299,7 +309,9 @@ def compute_allowlist(tip_paths: set[str], previous: list[str]) -> set[str]:
     Returns:
         Tip paths plus previously allowed paths, minus never-imported paths.
     """
-    return (tip_paths | set(previous)) - NEVER_IMPORTED
+    return {
+        path for path in tip_paths | set(previous) if not _matches(path, NEVER_IMPORTED)
+    }
 
 
 def _commit_message(raw: bytes) -> bytes:

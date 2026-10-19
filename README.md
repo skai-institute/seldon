@@ -144,7 +144,6 @@ python SELDON_Data_Generator_forecaster.py --config ./logs/SELDON_run/version_0
 - `tests/` — pytest suite (smoke, instantiation, factories, imports, configs, alias).
 - `load_model.py` — Helper to load a saved experiment/checkpoint for evaluation.
 - `SELDON_Data_Generator*.py` — Scripts to load checkpoints and dump reconstructions/forecasts to safetensors.
-- `docs/` — Project planning and design documents.
 - `tools/tfm_sync/` — Maintainer tool that syncs this repository from the private development repository.
 - `RELEASING.md` — How releases, tags, and versions are made.
 
