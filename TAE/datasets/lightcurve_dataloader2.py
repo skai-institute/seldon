@@ -151,11 +151,14 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
 
         def get_df(path):
 
-            print("Extracting", path, file=sys.stderr)
-            available_columns = extract_column_names(path)
+            # path is a parquet file, or a DataFrame already in memory
+            from_frame = isinstance(path, pd.DataFrame)
+            source = "DataFrame" if from_frame else path
+            print("Extracting", source, file=sys.stderr)
+            available_columns = list(path.columns) if from_frame else extract_column_names(path)
             #print(available_columns, file=sys.stderr)
             accessible_columns = set(available_columns) & set(self.column_map.keys())
-            if 'ELASTICC_class' not in accessible_columns:
+            if 'ELASTICC_class' not in accessible_columns and not from_frame:
                 accessible_columns |= {'class'}
             unavailable_columns = set(self.column_map.keys()) - accessible_columns
             if len(unavailable_columns):
@@ -163,7 +166,10 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
 
             try:
                 column_map = {key: value for key, value in self.column_map.items() if key in accessible_columns}
-                df = pd.read_parquet(path, columns=list(accessible_columns))
+                if from_frame:
+                    df = path[list(accessible_columns)].copy()
+                else:
+                    df = pd.read_parquet(path, columns=list(accessible_columns))
             except:
                 keys = list(column_map.keys()) # TEMP WORKAROUND
                 keys = [key for key in keys if 'ELASTICC' not in key]
@@ -188,11 +194,11 @@ class FlexibleLightCurveDataLoader(pl.LightningDataModule):
                 
             else:
                 print(f"No Class Filter Provided, extracting all classes: {len(df)} entries found", file=sys.stderr)
-            print("Loaded", path, "with", len(df), "rows", file=sys.stderr)
+            print("Loaded", source, "with", len(df), "rows", file=sys.stderr)
             assert len(df)
             return df
 
-        if isinstance(self.lightcurve_path, str):
+        if isinstance(self.lightcurve_path, (str, pd.DataFrame)):
             df = get_df(self.lightcurve_path)
         else:
             df = pd.concat(list(map(get_df, self.lightcurve_path)), ignore_index=True)
